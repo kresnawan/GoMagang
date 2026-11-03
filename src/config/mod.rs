@@ -8,6 +8,7 @@ const DEFAULT_FRONTEND_URL: &str = "http://localhost:5173";
 const MIN_JWT_SECRET_LEN: usize = 32;
 
 pub struct Config {
+    pub database_url: String,
     pub cors_allowed_origins: Vec<HeaderValue>,
     pub google_client_id: String,
     pub google_client_secret: String,
@@ -32,6 +33,7 @@ impl Config {
         );
 
         Self {
+            database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"),
             cors_allowed_origins: parse_origins(&origins),
             google_client_id: std::env::var("GOOGLE_CLIENT_ID")
                 .expect("GOOGLE_CLIENT_ID must be set"),

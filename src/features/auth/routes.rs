@@ -11,5 +11,6 @@ pub fn routes() -> Router<AppState> {
         .route("/auth/google/login", get(handler::google_login))
         .route("/auth/google", get(handler::google_callback))
         .route("/auth/me", get(handler::me))
+        .route("/auth/refresh", post(handler::refresh))
         .route("/auth/logout", post(handler::logout))
 }

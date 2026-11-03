@@ -15,18 +15,22 @@ use axum::{
 };
 use jsonwebtoken::{EncodingKey, Header, encode};
 use serde_json::{Value, json};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use tower::ServiceExt;
 
-use super::GoogleClient;
+use super::{GoogleClient, repository, session::hash_token};
 use crate::{app, config::Config, state::AppState};
 
 const CLIENT_ID: &str = "test-client-id";
 const CLIENT_SECRET: &str = "test-client-secret";
 const FRONTEND_URL: &str = "http://frontend.test";
 const JWT_SECRET: &str = "test-secret-with-at-least-32-bytes!";
+const CALLBACK: &str = "/auth/google?code=good-code&state=abc";
+const STATE_COOKIE: &str = "oauth_state=abc";
 
 fn config() -> Config {
     Config {
+        database_url: String::new(),
         cors_allowed_origins: vec![],
         google_client_id: CLIENT_ID.to_string(),
         google_client_secret: CLIENT_SECRET.to_string(),
@@ -54,7 +58,6 @@ fn id_token_claims() -> Value {
         "sub": "1234567890",
         "email": "mahasiswa@student.ub.ac.id",
         "email_verified": true,
-        "name": "Mahasiswa",
         "hd": "student.ub.ac.id",
         "aud": CLIENT_ID,
         "iss": "https://accounts.google.com",
@@ -68,7 +71,7 @@ struct MockGoogle {
 }
 
 /// Serves `/token` on a local port. Only the code `good-code` is accepted.
-async fn app_with_google(claims: Value) -> MockGoogle {
+async fn app_with_google(db: PgPool, claims: Value) -> MockGoogle {
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = calls.clone();
     let id_token = sign(&claims, "google-key");
@@ -97,7 +100,7 @@ async fn app_with_google(claims: Value) -> MockGoogle {
     });
 
     let config = config();
-    let mut state = AppState::new(&config);
+    let mut state = AppState::new(&config, db);
     state.google =
         Arc::new(GoogleClient::new(&config).with_token_url(format!("http://{addr}/token")));
 
@@ -107,8 +110,12 @@ async fn app_with_google(claims: Value) -> MockGoogle {
     }
 }
 
-fn plain_app(config: &Config) -> Router {
-    app::build(config, AppState::new(config))
+/// For routes that never touch the database: the pool doesn't connect until it's used.
+fn app_without_db(config: &Config) -> Router {
+    let db = PgPoolOptions::new()
+        .connect_lazy("postgres://localhost/unused")
+        .unwrap();
+    app::build(config, AppState::new(config, db))
 }
 
 async fn send(app: Router, method: &str, uri: &str, cookie: Option<&str>) -> Response<Body> {
@@ -133,13 +140,69 @@ fn set_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .find(|value| value.starts_with(&format!("{name}=")))
 }
 
-fn cookie_value(set_cookie: &str) -> &str {
-    set_cookie.split(';').next().unwrap()
+/// The `name=value` part of a `Set-Cookie` header, which is what the browser sends back.
+fn cookie_pair(set_cookie: &str) -> String {
+    set_cookie.split(';').next().unwrap().to_string()
+}
+
+fn max_age(set_cookie: &str) -> u64 {
+    set_cookie
+        .split("Max-Age=")
+        .nth(1)
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap()
+}
+
+fn token_cookies(response: &Response<Body>) -> (String, String) {
+    (
+        cookie_pair(set_cookie(response.headers(), "access_token").unwrap()),
+        cookie_pair(set_cookie(response.headers(), "refresh_token").unwrap()),
+    )
+}
+
+fn token_hash(refresh_cookie: &str) -> Vec<u8> {
+    hash_token(refresh_cookie.trim_start_matches("refresh_token="))
+}
+
+/// Logs in through the callback and returns the app with the issued cookies.
+async fn login(db: PgPool) -> (Router, String, String) {
+    let mock = app_with_google(db, id_token_claims()).await;
+    let response = send(mock.router.clone(), "GET", CALLBACK, Some(STATE_COOKIE)).await;
+    let (access, refresh) = token_cookies(&response);
+    (mock.router, access, refresh)
+}
+
+async fn refresh(app: &Router, cookie: &str) -> Response<Body> {
+    send(app.clone(), "POST", "/auth/refresh", Some(cookie)).await
+}
+
+async fn token_count(db: &PgPool) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM token_refresh")
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+/// Moves the rotation of a token into the past, as if the grace period had passed.
+async fn age_rotation(db: &PgPool, refresh_cookie: &str, seconds: f64) {
+    sqlx::query(
+        "UPDATE token_refresh SET rotated_at = now() - make_interval(secs => $2)
+         WHERE hash_token = $1",
+    )
+    .bind(token_hash(refresh_cookie))
+    .bind(seconds)
+    .execute(db)
+    .await
+    .unwrap();
 }
 
 #[tokio::test]
 async fn login_redirects_to_google_and_sets_state_cookie() {
-    let response = send(plain_app(&config()), "GET", "/auth/google/login", None).await;
+    let response = send(app_without_db(&config()), "GET", "/auth/google/login", None).await;
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let cookie = set_cookie(response.headers(), "oauth_state").unwrap();
@@ -148,7 +211,8 @@ async fn login_redirects_to_google_and_sets_state_cookie() {
     assert!(cookie.contains("Path=/auth/google"));
     assert!(!cookie.contains("Secure"));
 
-    let state = cookie_value(cookie).trim_start_matches("oauth_state=");
+    let pair = cookie_pair(cookie);
+    let state = pair.trim_start_matches("oauth_state=");
     assert_eq!(state.len(), 64);
     let url = location(&response);
     assert!(url.starts_with("https://accounts.google.com/o/oauth2/v2/auth?"));
@@ -161,13 +225,45 @@ async fn login_redirects_to_google_and_sets_state_cookie() {
 
 #[tokio::test]
 async fn login_uses_a_new_state_each_time() {
-    let first = send(plain_app(&config()), "GET", "/auth/google/login", None).await;
-    let second = send(plain_app(&config()), "GET", "/auth/google/login", None).await;
+    let app = app_without_db(&config());
+    let first = send(app.clone(), "GET", "/auth/google/login", None).await;
+    let second = send(app, "GET", "/auth/google/login", None).await;
 
     assert_ne!(
         set_cookie(first.headers(), "oauth_state"),
         set_cookie(second.headers(), "oauth_state"),
     );
+}
+
+#[sqlx::test]
+async fn callback_sets_both_cookies_and_me_accepts_the_access_token(db: PgPool) {
+    let mock = app_with_google(db, id_token_claims()).await;
+    let response = send(mock.router.clone(), "GET", CALLBACK, Some(STATE_COOKIE)).await;
+
+    assert_eq!(location(&response), "http://frontend.test/dasbor");
+    let access = set_cookie(response.headers(), "access_token").unwrap();
+    assert!(access.contains("HttpOnly"));
+    assert!(access.contains("SameSite=Lax"));
+    assert!(access.contains("Path=/;") || access.ends_with("Path=/"));
+    assert_eq!(max_age(access), 900);
+    let refresh = set_cookie(response.headers(), "refresh_token").unwrap();
+    assert!(refresh.contains("HttpOnly"));
+    assert!(refresh.contains("SameSite=Lax"));
+    assert!(refresh.contains("Path=/auth"));
+    assert_eq!(max_age(refresh), 604800);
+    assert_eq!(
+        max_age(set_cookie(response.headers(), "oauth_state").unwrap()),
+        0
+    );
+
+    let cookie = cookie_pair(access);
+    let response = send(mock.router, "GET", "/auth/me", Some(&cookie)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let user: Value = serde_json::from_slice(&body).unwrap();
+    assert!(user["id_pengguna"].is_i64());
+    assert_eq!(user["email"], "mahasiswa@student.ub.ac.id");
+    assert!(user.get("name").is_none());
 }
 
 #[tokio::test]
@@ -176,65 +272,123 @@ async fn cookies_are_secure_when_configured() {
         cookie_secure: true,
         ..config()
     };
-    let response = send(plain_app(&config), "GET", "/auth/google/login", None).await;
+    let response = send(app_without_db(&config), "GET", "/auth/google/login", None).await;
 
     let cookie = set_cookie(response.headers(), "oauth_state").unwrap();
     assert!(cookie.contains("Secure"));
 }
 
-#[tokio::test]
-async fn callback_creates_a_session_that_me_accepts() {
-    let mock = app_with_google(id_token_claims()).await;
-    let response = send(
-        mock.router.clone(),
-        "GET",
-        "/auth/google?code=good-code&state=abc",
-        Some("oauth_state=abc"),
-    )
-    .await;
+#[sqlx::test]
+async fn refresh_tokens_are_stored_only_as_hashes(db: PgPool) {
+    let (_, _, refresh_cookie) = login(db.clone()).await;
+    let token = refresh_cookie.trim_start_matches("refresh_token=");
 
-    assert_eq!(location(&response), "http://frontend.test/dasbor");
-    let session = set_cookie(response.headers(), "session").unwrap();
-    assert!(session.contains("HttpOnly"));
-    assert!(session.contains("SameSite=Lax"));
-    assert!(session.contains("Path=/"));
-    assert!(session.contains("Max-Age=604800"));
-    let state_cookie = set_cookie(response.headers(), "oauth_state").unwrap();
-    assert!(state_cookie.contains("Max-Age=0"));
+    let stored: Vec<u8> = sqlx::query_scalar("SELECT hash_token FROM token_refresh")
+        .fetch_one(&db)
+        .await
+        .unwrap();
 
-    let response = send(mock.router, "GET", "/auth/me", Some(cookie_value(session))).await;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-    let user: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(stored, hash_token(token));
+    assert_ne!(stored, token.as_bytes());
+}
+
+#[sqlx::test]
+async fn logging_in_again_updates_the_same_pengguna(db: PgPool) {
+    let _ = login(db.clone()).await;
+    let mut claims = id_token_claims();
+    claims["email"] = json!("baru@student.ub.ac.id");
+    let mock = app_with_google(db.clone(), claims).await;
+    send(mock.router, "GET", CALLBACK, Some(STATE_COOKIE)).await;
+
+    let emails: Vec<String> = sqlx::query_scalar("SELECT email FROM pengguna")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(emails, ["baru@student.ub.ac.id"]);
+}
+
+#[sqlx::test]
+async fn login_creates_pengguna_but_not_mahasiswa(db: PgPool) {
+    let _ = login(db.clone()).await;
+
+    let pengguna: i64 = sqlx::query_scalar("SELECT count(*) FROM pengguna")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let mahasiswa: i64 = sqlx::query_scalar("SELECT count(*) FROM mahasiswa")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!((pengguna, mahasiswa), (1, 0));
+}
+
+#[sqlx::test]
+async fn email_owned_by_another_google_account_cannot_log_in(db: PgPool) {
+    let _ = login(db.clone()).await;
+    let mut claims = id_token_claims();
+    claims["sub"] = json!("different-google-account");
+    let mock = app_with_google(db.clone(), claims).await;
+
+    let response = send(mock.router, "GET", CALLBACK, Some(STATE_COOKIE)).await;
+
     assert_eq!(
-        user,
-        json!({
-            "sub": "1234567890",
-            "email": "mahasiswa@student.ub.ac.id",
-            "name": "Mahasiswa",
-        })
+        location(&response),
+        "http://frontend.test/login?error=failed"
+    );
+    assert!(set_cookie(response.headers(), "access_token").is_none());
+    assert_eq!(token_count(&db).await, 1);
+}
+
+#[sqlx::test]
+async fn migrations_create_every_table_in_the_erd(db: PgPool) {
+    let tables: Vec<String> = sqlx::query_scalar(
+        "SELECT table_name::text FROM information_schema.tables
+         WHERE table_schema = 'public' AND table_name <> '_sqlx_migrations'
+         ORDER BY table_name",
+    )
+    .fetch_all(&db)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        tables,
+        [
+            "berkas_pendaftaran",
+            "jadwal_seleksi_substansi",
+            "log_status",
+            "mahasiswa",
+            "mata_kuliah_konversi",
+            "pendaftaran",
+            "pengguna",
+            "penyetaraan_mk",
+            "periode_pendaftaran",
+            "perusahaan_mitra",
+            "plotting_dpm",
+            "posisi_magang",
+            "status_pendaftaran",
+            "surat_keterangan",
+            "templat_sp_dpa",
+            "tim_mb",
+            "token_refresh",
+        ]
     );
 }
 
-#[tokio::test]
-async fn callback_rejects_bad_state_without_calling_google() {
+#[sqlx::test]
+async fn callback_rejects_bad_state_without_calling_google(db: PgPool) {
     let cases = [
-        (
-            "mismatch",
-            "/auth/google?code=good-code&state=abc",
-            Some("oauth_state=other"),
-        ),
-        ("no cookie", "/auth/google?code=good-code&state=abc", None),
+        ("mismatch", CALLBACK, Some("oauth_state=other")),
+        ("no cookie", CALLBACK, None),
         (
             "no param",
             "/auth/google?code=good-code",
-            Some("oauth_state=abc"),
+            Some(STATE_COOKIE),
         ),
         ("neither", "/auth/google?code=good-code", None),
     ];
 
     for (name, uri, cookie) in cases {
-        let mock = app_with_google(id_token_claims()).await;
+        let mock = app_with_google(db.clone(), id_token_claims()).await;
         let response = send(mock.router, "GET", uri, cookie).await;
 
         assert_eq!(
@@ -243,21 +397,21 @@ async fn callback_rejects_bad_state_without_calling_google() {
             "{name}"
         );
         assert!(
-            set_cookie(response.headers(), "session").is_none(),
+            set_cookie(response.headers(), "access_token").is_none(),
             "{name}"
         );
         assert_eq!(mock.calls.load(Ordering::SeqCst), 0, "{name}");
     }
 }
 
-#[tokio::test]
-async fn callback_reports_cancelled_login() {
-    let mock = app_with_google(id_token_claims()).await;
+#[sqlx::test]
+async fn callback_reports_cancelled_login(db: PgPool) {
+    let mock = app_with_google(db, id_token_claims()).await;
     let response = send(
         mock.router,
         "GET",
         "/auth/google?error=access_denied&state=abc",
-        Some("oauth_state=abc"),
+        Some(STATE_COOKIE),
     )
     .await;
 
@@ -268,14 +422,14 @@ async fn callback_reports_cancelled_login() {
     assert_eq!(mock.calls.load(Ordering::SeqCst), 0);
 }
 
-#[tokio::test]
-async fn callback_rejects_code_google_refuses() {
-    let mock = app_with_google(id_token_claims()).await;
+#[sqlx::test]
+async fn callback_rejects_code_google_refuses(db: PgPool) {
+    let mock = app_with_google(db, id_token_claims()).await;
     let response = send(
         mock.router,
         "GET",
         "/auth/google?code=bad-code&state=abc",
-        Some("oauth_state=abc"),
+        Some(STATE_COOKIE),
     )
     .await;
 
@@ -283,10 +437,10 @@ async fn callback_rejects_code_google_refuses() {
         location(&response),
         "http://frontend.test/login?error=failed"
     );
-    assert!(set_cookie(response.headers(), "session").is_none());
+    assert!(set_cookie(response.headers(), "access_token").is_none());
 }
 
-async fn callback_location_with(field: &str, value: Option<Value>) -> String {
+async fn callback_location_with(db: PgPool, field: &str, value: Option<Value>) -> String {
     let mut claims = id_token_claims();
     match value {
         Some(value) => claims[field] = value,
@@ -295,21 +449,16 @@ async fn callback_location_with(field: &str, value: Option<Value>) -> String {
         }
     }
 
-    let mock = app_with_google(claims).await;
-    let response = send(
-        mock.router,
-        "GET",
-        "/auth/google?code=good-code&state=abc",
-        Some("oauth_state=abc"),
-    )
-    .await;
+    let mock = app_with_google(db.clone(), claims).await;
+    let response = send(mock.router, "GET", CALLBACK, Some(STATE_COOKIE)).await;
 
-    assert!(set_cookie(response.headers(), "session").is_none());
+    assert!(set_cookie(response.headers(), "access_token").is_none());
+    assert_eq!(token_count(&db).await, 0);
     location(&response).to_string()
 }
 
-#[tokio::test]
-async fn callback_rejects_invalid_id_tokens() {
+#[sqlx::test]
+async fn callback_rejects_invalid_id_tokens(db: PgPool) {
     let cases = [
         ("wrong aud", "aud", Some(json!("other-client"))),
         ("wrong iss", "iss", Some(json!("https://evil.example"))),
@@ -323,15 +472,15 @@ async fn callback_rejects_invalid_id_tokens() {
 
     for (name, field, value) in cases {
         assert_eq!(
-            callback_location_with(field, value).await,
+            callback_location_with(db.clone(), field, value).await,
             "http://frontend.test/login?error=failed",
             "{name}"
         );
     }
 }
 
-#[tokio::test]
-async fn callback_rejects_disallowed_accounts() {
+#[sqlx::test]
+async fn callback_rejects_disallowed_accounts(db: PgPool) {
     let cases = [
         ("other domain", "email", Some(json!("a@gmail.com"))),
         (
@@ -348,52 +497,231 @@ async fn callback_rejects_disallowed_accounts() {
 
     for (name, field, value) in cases {
         assert_eq!(
-            callback_location_with(field, value).await,
+            callback_location_with(db.clone(), field, value).await,
             "http://frontend.test/login?error=domain",
             "{name}"
         );
     }
 }
 
-fn session_claims(exp: u64) -> Value {
-    json!({ "sub": "1", "email": "a@student.ub.ac.id", "name": null, "iat": 0, "exp": exp })
+fn access_claims(exp: u64) -> Value {
+    json!({
+        "sub": "1",
+        "email": "a@student.ub.ac.id",
+        "iat": 0,
+        "exp": exp,
+    })
 }
 
 #[tokio::test]
-async fn me_rejects_missing_or_invalid_sessions() {
+async fn me_rejects_missing_or_invalid_access_tokens() {
     let wrong_key = format!(
-        "session={}",
+        "access_token={}",
         sign(
-            &session_claims(now() + 3600),
+            &access_claims(now() + 3600),
             "another-secret-with-at-least-32-bytes"
         )
     );
-    let expired = format!("session={}", sign(&session_claims(1000), JWT_SECRET));
+    let expired = format!("access_token={}", sign(&access_claims(1000), JWT_SECRET));
     let cases = [
         ("missing", None),
-        ("garbage", Some("session=not-a-jwt")),
+        ("garbage", Some("access_token=not-a-jwt")),
         ("wrong key", Some(wrong_key.as_str())),
         ("expired", Some(expired.as_str())),
     ];
 
     for (name, cookie) in cases {
-        let response = send(plain_app(&config()), "GET", "/auth/me", cookie).await;
+        let response = send(app_without_db(&config()), "GET", "/auth/me", cookie).await;
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED, "{name}");
     }
 }
 
-#[tokio::test]
-async fn logout_clears_the_session_cookie() {
-    let response = send(
-        plain_app(&config()),
-        "POST",
-        "/auth/logout",
-        Some("session=anything"),
+#[sqlx::test]
+async fn refresh_issues_new_tokens_that_work(db: PgPool) {
+    let (app, _, old_refresh) = login(db).await;
+
+    let response = refresh(&app, &old_refresh).await;
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let (access, new_refresh) = token_cookies(&response);
+    assert_ne!(new_refresh, old_refresh);
+
+    let me = send(app.clone(), "GET", "/auth/me", Some(&access)).await;
+    assert_eq!(me.status(), StatusCode::OK);
+    assert_eq!(
+        refresh(&app, &new_refresh).await.status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[sqlx::test]
+async fn refresh_keeps_the_absolute_expiry(db: PgPool) {
+    let (app, _, old_refresh) = login(db.clone()).await;
+    sqlx::query("UPDATE token_refresh SET expires_at = now() + interval '1 hour'")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    let response = refresh(&app, &old_refresh).await;
+
+    let cookie = set_cookie(response.headers(), "refresh_token").unwrap();
+    assert!((3590..=3600).contains(&max_age(cookie)), "{cookie}");
+    assert!(cookie.contains("Path=/auth"));
+    let distinct_expiries: i64 =
+        sqlx::query_scalar("SELECT count(DISTINCT expires_at) FROM token_refresh")
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert_eq!(distinct_expiries, 1);
+    assert_eq!(token_count(&db).await, 2);
+}
+
+#[sqlx::test]
+async fn refresh_rejects_expired_tokens_and_clears_cookies(db: PgPool) {
+    let (app, access, old_refresh) = login(db.clone()).await;
+    sqlx::query("UPDATE token_refresh SET expires_at = now() - interval '1 second'")
+        .execute(&db)
+        .await
+        .unwrap();
+
+    let cookies = format!("{access}; {old_refresh}");
+    let response = refresh(&app, &cookies).await;
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let cleared = set_cookie(response.headers(), "refresh_token").unwrap();
+    assert_eq!(max_age(cleared), 0);
+    assert!(cleared.contains("Path=/auth"));
+    assert_eq!(
+        max_age(set_cookie(response.headers(), "access_token").unwrap()),
+        0
+    );
+}
+
+#[sqlx::test]
+async fn refresh_rejects_missing_or_unknown_tokens(db: PgPool) {
+    let (app, _, _) = login(db).await;
+
+    let missing = send(app.clone(), "POST", "/auth/refresh", None).await;
+    assert_eq!(missing.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        refresh(&app, "refresh_token=unknown").await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[sqlx::test]
+async fn rotated_token_still_works_within_the_grace_period(db: PgPool) {
+    let (app, _, old_refresh) = login(db.clone()).await;
+
+    let first = refresh(&app, &old_refresh).await;
+    let second = refresh(&app, &old_refresh).await;
+
+    assert_eq!(first.status(), StatusCode::NO_CONTENT);
+    assert_eq!(second.status(), StatusCode::NO_CONTENT);
+    let (_, first_new) = token_cookies(&first);
+    let (_, second_new) = token_cookies(&second);
+    assert_eq!(
+        refresh(&app, &first_new).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        refresh(&app, &second_new).await.status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[sqlx::test]
+async fn concurrent_refreshes_with_the_same_token_all_succeed(db: PgPool) {
+    let (app, _, old_refresh) = login(db.clone()).await;
+
+    let (a, b, c, d) = tokio::join!(
+        refresh(&app, &old_refresh),
+        refresh(&app, &old_refresh),
+        refresh(&app, &old_refresh),
+        refresh(&app, &old_refresh),
+    );
+
+    for response in [a, b, c, d] {
+        assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    }
+    assert_eq!(token_count(&db).await, 5);
+}
+
+#[sqlx::test]
+async fn repeated_use_does_not_extend_the_grace_period(db: PgPool) {
+    let (app, _, old_refresh) = login(db.clone()).await;
+    refresh(&app, &old_refresh).await;
+    age_rotation(&db, &old_refresh, 9.0).await;
+
+    refresh(&app, &old_refresh).await;
+
+    let rotated_long_ago: bool = sqlx::query_scalar(
+        "SELECT rotated_at < now() - interval '8 seconds' FROM token_refresh WHERE hash_token = $1",
     )
-    .await;
+    .bind(token_hash(&old_refresh))
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(rotated_long_ago);
+}
+
+#[sqlx::test]
+async fn reuse_after_the_grace_period_revokes_the_family_only(db: PgPool) {
+    let (app, _, stolen) = login(db.clone()).await;
+    let (_, _, other_device) = login(db.clone()).await;
+    let (_, current) = token_cookies(&refresh(&app, &stolen).await);
+    age_rotation(&db, &stolen, 11.0).await;
+
+    let reuse = refresh(&app, &stolen).await;
+    assert_eq!(reuse.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        refresh(&app, &current).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        refresh(&app, &other_device).await.status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[sqlx::test]
+async fn logout_revokes_the_family_and_clears_cookies(db: PgPool) {
+    let (app, access, refresh_cookie) = login(db.clone()).await;
+    let (_, _, other_device) = login(db.clone()).await;
+
+    let cookies = format!("{access}; {refresh_cookie}");
+    let response = send(app.clone(), "POST", "/auth/logout", Some(&cookies)).await;
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    let cookie = set_cookie(response.headers(), "session").unwrap();
-    assert!(cookie.contains("Max-Age=0"));
-    assert!(cookie.contains("Path=/"));
+    assert_eq!(
+        max_age(set_cookie(response.headers(), "access_token").unwrap()),
+        0
+    );
+    let cleared = set_cookie(response.headers(), "refresh_token").unwrap();
+    assert_eq!(max_age(cleared), 0);
+    assert!(cleared.contains("Path=/auth"));
+
+    assert_eq!(
+        refresh(&app, &refresh_cookie).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        refresh(&app, &other_device).await.status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[sqlx::test]
+async fn cleanup_deletes_only_expired_tokens(db: PgPool) {
+    let (_, _, expired) = login(db.clone()).await;
+    let _ = login(db.clone()).await;
+    sqlx::query(
+        "UPDATE token_refresh SET expires_at = now() - interval '1 second' WHERE hash_token = $1",
+    )
+    .bind(token_hash(&expired))
+    .execute(&db)
+    .await
+    .unwrap();
+
+    assert_eq!(repository::delete_expired_tokens(&db).await.unwrap(), 1);
+    assert_eq!(token_count(&db).await, 1);
 }

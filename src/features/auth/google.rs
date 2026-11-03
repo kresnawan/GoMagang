@@ -8,7 +8,7 @@ use crate::{config::Config, error::AppError};
 
 const AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
-const SCOPE: &str = "openid email profile";
+const SCOPE: &str = "openid email";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const ISSUERS: [&str; 2] = ["accounts.google.com", "https://accounts.google.com"];
 const ALLOWED_DOMAIN: &str = "student.ub.ac.id";

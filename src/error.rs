@@ -12,6 +12,13 @@ pub enum AppError {
     ServiceUnavailable,
 }
 
+impl From<sqlx::Error> for AppError {
+    fn from(err: sqlx::Error) -> Self {
+        eprintln!("database error: {err}");
+        AppError::Internal
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         match self {
