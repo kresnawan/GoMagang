@@ -3,7 +3,7 @@ use std::time::Duration;
 use sqlx::{FromRow, PgPool};
 use uuid::Uuid;
 
-use super::model::{GoogleClaims, User};
+use super::model::{GoogleClaims, Peran, User};
 
 const CLEANUP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
@@ -21,8 +21,11 @@ pub struct RotatedToken {
     pub expires_in: Duration,
 }
 
-pub async fn upsert_user(db: &PgPool, claims: &GoogleClaims) -> Result<User, sqlx::Error> {
-    sqlx::query_as(
+/// Saves the pengguna, and makes sure it has a mahasiswa row without touching existing data.
+pub async fn upsert_mahasiswa(db: &PgPool, claims: &GoogleClaims) -> Result<User, sqlx::Error> {
+    let mut tx = db.begin().await?;
+
+    let user: User = sqlx::query_as(
         "INSERT INTO pengguna (google_sub, email)
          VALUES ($1, $2)
          ON CONFLICT (google_sub) DO UPDATE
@@ -31,8 +34,54 @@ pub async fn upsert_user(db: &PgPool, claims: &GoogleClaims) -> Result<User, sql
     )
     .bind(&claims.sub)
     .bind(&claims.email)
-    .fetch_one(db)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    sqlx::query("INSERT INTO mahasiswa (id_pengguna) VALUES ($1) ON CONFLICT DO NOTHING")
+        .bind(user.id_pengguna)
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(user)
+}
+
+/// Finds the Tim MB member with this email, and ties the row to the Google account on first login.
+///
+/// Returns `None` if the email isn't registered in tim_mb, or if another Google account already
+/// claimed the row.
+pub async fn find_tim_mb(db: &PgPool, claims: &GoogleClaims) -> Result<Option<User>, sqlx::Error> {
+    sqlx::query_as(
+        "UPDATE pengguna p
+         SET google_sub = $1
+         FROM tim_mb t
+         WHERE t.id_pengguna = p.id_pengguna
+           AND lower(p.email) = lower($2)
+           AND (p.google_sub IS NULL OR p.google_sub = $1)
+         RETURNING p.id_pengguna, p.email",
+    )
+    .bind(&claims.sub)
+    .bind(&claims.email)
+    .fetch_optional(db)
     .await
+}
+
+/// Who this pengguna is, going by the table their row is in. Tim MB wins if they are in both.
+pub async fn find_peran(db: &PgPool, id_pengguna: i32) -> Result<Option<Peran>, sqlx::Error> {
+    let (tim_mb, mahasiswa): (bool, bool) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM tim_mb WHERE id_pengguna = $1),
+                EXISTS (SELECT 1 FROM mahasiswa WHERE id_pengguna = $1)",
+    )
+    .bind(id_pengguna)
+    .fetch_one(db)
+    .await?;
+
+    Ok(match (tim_mb, mahasiswa) {
+        (true, _) => Some(Peran::TimMb),
+        (false, true) => Some(Peran::Mahasiswa),
+        (false, false) => None,
+    })
 }
 
 pub async fn create_refresh_token(

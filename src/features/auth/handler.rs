@@ -12,6 +12,7 @@ use axum_extra::extract::{
 };
 
 use super::{
+    google::AccountKind,
     model::{GoogleCallbackQuery, GoogleClaims, User},
     repository,
     session::{REFRESH_COOKIE, REFRESH_GRACE, REFRESH_TTL, generate_token, hash_token},
@@ -21,7 +22,8 @@ use crate::{error::AppError, state::AppState};
 const STATE_COOKIE: &str = "oauth_state";
 const STATE_COOKIE_PATH: &str = "/auth/google";
 const STATE_TTL: Duration = Duration::from_secs(10 * 60);
-const LOGIN_SUCCESS_PATH: &str = "/dasbor";
+const MAHASISWA_HOME_PATH: &str = "/dasbor";
+const TIM_MB_HOME_PATH: &str = "/tim-mb";
 
 pub async fn google_login(
     State(state): State<AppState>,
@@ -49,9 +51,12 @@ pub async fn google_callback(
     let jar = jar.remove(Cookie::build(STATE_COOKIE).path(STATE_COOKIE_PATH));
 
     match complete_login(&state, expected_state, query).await {
-        Ok((access, refresh)) => {
-            let url = format!("{}{LOGIN_SUCCESS_PATH}", state.frontend_url);
-            (jar.add(access).add(refresh), Redirect::to(&url))
+        Ok(session) => {
+            let url = format!("{}{}", state.frontend_url, session.home_path);
+            (
+                jar.add(session.access).add(session.refresh),
+                Redirect::to(&url),
+            )
         }
         Err(code) => {
             let url = format!("{}/login?error={code}", state.frontend_url);
@@ -88,12 +93,18 @@ pub async fn logout(
     Ok((state.sessions.clear_cookies(jar), StatusCode::NO_CONTENT))
 }
 
-/// Returns the session cookies, or the error code the frontend expects on `/login?error=`.
+struct LoginSession {
+    access: Cookie<'static>,
+    refresh: Cookie<'static>,
+    home_path: &'static str,
+}
+
+/// Returns the new session, or the error code the frontend expects on `/login?error=`.
 async fn complete_login(
     state: &AppState,
     expected_state: Option<String>,
     query: GoogleCallbackQuery,
-) -> Result<(Cookie<'static>, Cookie<'static>), &'static str> {
+) -> Result<LoginSession, &'static str> {
     if expected_state.is_none() || expected_state != query.state {
         return Err("failed");
     }
@@ -102,7 +113,7 @@ async fn complete_login(
     }
 
     let code = query.code.ok_or("failed")?;
-    let claims = state
+    let (claims, kind) = state
         .google
         .exchange_code(&code)
         .await
@@ -111,14 +122,31 @@ async fn complete_login(
             _ => "failed",
         })?;
 
-    start_session(state, &claims).await.map_err(|_| "failed")
+    start_session(state, &claims, kind)
+        .await
+        .map_err(|err| match err {
+            AppError::Forbidden => "not_registered",
+            _ => "failed",
+        })
 }
 
 async fn start_session(
     state: &AppState,
     claims: &GoogleClaims,
-) -> Result<(Cookie<'static>, Cookie<'static>), AppError> {
-    let user = repository::upsert_user(&state.db, claims).await?;
+    kind: AccountKind,
+) -> Result<LoginSession, AppError> {
+    let (user, home_path) = match kind {
+        AccountKind::Mahasiswa => (
+            repository::upsert_mahasiswa(&state.db, claims).await?,
+            MAHASISWA_HOME_PATH,
+        ),
+        AccountKind::TimMb => (
+            repository::find_tim_mb(&state.db, claims)
+                .await?
+                .ok_or(AppError::Forbidden)?,
+            TIM_MB_HOME_PATH,
+        ),
+    };
     let token = generate_token();
     repository::create_refresh_token(
         &state.db,
@@ -128,10 +156,11 @@ async fn start_session(
     )
     .await?;
 
-    Ok((
-        state.sessions.access_cookie(&user)?,
-        state.sessions.refresh_cookie(token, REFRESH_TTL)?,
-    ))
+    Ok(LoginSession {
+        access: state.sessions.access_cookie(&user)?,
+        refresh: state.sessions.refresh_cookie(token, REFRESH_TTL)?,
+        home_path,
+    })
 }
 
 async fn rotate_session(

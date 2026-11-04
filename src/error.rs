@@ -1,15 +1,24 @@
 use axum::{
+    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use serde::Serialize;
 
 #[derive(Debug)]
 pub enum AppError {
     Unauthorized,
     Forbidden,
     NotFound,
+    Conflict(&'static str),
+    Validation(&'static str),
     Internal,
     ServiceUnavailable,
+}
+
+#[derive(Serialize)]
+struct ErrorBody {
+    message: &'static str,
 }
 
 impl From<sqlx::Error> for AppError {
@@ -25,6 +34,14 @@ impl IntoResponse for AppError {
             AppError::Unauthorized => StatusCode::UNAUTHORIZED.into_response(),
             AppError::Forbidden => StatusCode::FORBIDDEN.into_response(),
             AppError::NotFound => StatusCode::NOT_FOUND.into_response(),
+            AppError::Conflict(message) => {
+                (StatusCode::CONFLICT, Json(ErrorBody { message })).into_response()
+            }
+            AppError::Validation(message) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(ErrorBody { message }),
+            )
+                .into_response(),
             AppError::Internal => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
             AppError::ServiceUnavailable => StatusCode::SERVICE_UNAVAILABLE.into_response(),
         }

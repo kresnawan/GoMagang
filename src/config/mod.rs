@@ -6,6 +6,7 @@ const DEFAULT_CORS_ALLOWED_ORIGINS: &str = "http://localhost:5173";
 const DEFAULT_GOOGLE_REDIRECT_URI: &str = "http://localhost:3000/auth/google";
 const DEFAULT_FRONTEND_URL: &str = "http://localhost:5173";
 const MIN_JWT_SECRET_LEN: usize = 32;
+const MIN_ADMIN_SECRET_LEN: usize = 32;
 
 pub struct Config {
     pub database_url: String,
@@ -15,6 +16,7 @@ pub struct Config {
     pub google_redirect_uri: String,
     pub frontend_url: String,
     pub jwt_secret: String,
+    pub admin_secret: Option<String>,
     pub cookie_secure: bool,
 }
 
@@ -32,6 +34,16 @@ impl Config {
             "JWT_SECRET must be at least {MIN_JWT_SECRET_LEN} bytes"
         );
 
+        let admin_secret = std::env::var("ADMIN_SECRET")
+            .ok()
+            .filter(|secret| !secret.is_empty());
+        assert!(
+            admin_secret
+                .as_ref()
+                .is_none_or(|secret| secret.len() >= MIN_ADMIN_SECRET_LEN),
+            "ADMIN_SECRET must be at least {MIN_ADMIN_SECRET_LEN} bytes"
+        );
+
         Self {
             database_url: std::env::var("DATABASE_URL").expect("DATABASE_URL must be set"),
             cors_allowed_origins: parse_origins(&origins),
@@ -44,6 +56,7 @@ impl Config {
             google_redirect_uri,
             frontend_url: frontend_url.trim_end_matches('/').to_string(),
             jwt_secret,
+            admin_secret,
         }
     }
 }

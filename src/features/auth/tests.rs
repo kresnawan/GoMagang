@@ -37,6 +37,7 @@ fn config() -> Config {
         google_redirect_uri: "http://backend.test/auth/google".to_string(),
         frontend_url: FRONTEND_URL.to_string(),
         jwt_secret: JWT_SECRET.to_string(),
+        admin_secret: None,
         cookie_secure: false,
     }
 }
@@ -219,7 +220,7 @@ async fn login_redirects_to_google_and_sets_state_cookie() {
     assert!(url.contains(&format!("state={state}")));
     assert!(url.contains(&format!("client_id={CLIENT_ID}")));
     assert!(url.contains("response_type=code"));
-    assert!(url.contains("hd=student.ub.ac.id"));
+    assert!(!url.contains("hd="), "hd would hide gmail.com accounts");
     assert!(url.contains("redirect_uri=http%3A%2F%2Fbackend.test%2Fauth%2Fgoogle"));
 }
 
@@ -307,19 +308,206 @@ async fn logging_in_again_updates_the_same_pengguna(db: PgPool) {
     assert_eq!(emails, ["baru@student.ub.ac.id"]);
 }
 
+async fn row_counts(db: &PgPool) -> (i64, i64) {
+    let pengguna = sqlx::query_scalar("SELECT count(*) FROM pengguna")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    let mahasiswa = sqlx::query_scalar("SELECT count(*) FROM mahasiswa")
+        .fetch_one(db)
+        .await
+        .unwrap();
+    (pengguna, mahasiswa)
+}
+
 #[sqlx::test]
-async fn login_creates_pengguna_but_not_mahasiswa(db: PgPool) {
+async fn login_creates_pengguna_and_mahasiswa(db: PgPool) {
+    let (app, access, _) = login(db.clone()).await;
+
+    assert_eq!(row_counts(&db).await, (1, 1));
+
+    let response = send(app, "GET", "/api/v1/mahasiswa/data", Some(&access)).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let mahasiswa: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(mahasiswa["email"], "mahasiswa@student.ub.ac.id");
+    assert_eq!(mahasiswa["nim"], Value::Null);
+}
+
+#[sqlx::test]
+async fn logging_in_again_keeps_the_mahasiswa_data(db: PgPool) {
+    let _ = login(db.clone()).await;
+    sqlx::query("UPDATE mahasiswa SET nim = '215150200111001', nama = 'Budi'")
+        .execute(&db)
+        .await
+        .unwrap();
+
     let _ = login(db.clone()).await;
 
-    let pengguna: i64 = sqlx::query_scalar("SELECT count(*) FROM pengguna")
+    assert_eq!(row_counts(&db).await, (1, 1));
+    let nama: String = sqlx::query_scalar("SELECT nama FROM mahasiswa")
         .fetch_one(&db)
         .await
         .unwrap();
-    let mahasiswa: i64 = sqlx::query_scalar("SELECT count(*) FROM mahasiswa")
-        .fetch_one(&db)
+    assert_eq!(nama, "Budi");
+}
+
+#[sqlx::test]
+async fn login_adds_the_mahasiswa_row_for_an_existing_pengguna(db: PgPool) {
+    let _ = login(db.clone()).await;
+    sqlx::query("DELETE FROM mahasiswa")
+        .execute(&db)
         .await
         .unwrap();
-    assert_eq!((pengguna, mahasiswa), (1, 0));
+
+    let _ = login(db.clone()).await;
+
+    assert_eq!(row_counts(&db).await, (1, 1));
+}
+
+const TIM_MB_EMAIL: &str = "tim.mb@gmail.com";
+
+fn tim_mb_claims() -> Value {
+    let mut claims = id_token_claims();
+    claims["sub"] = json!("tim-mb-google-sub");
+    claims["email"] = json!(TIM_MB_EMAIL);
+    claims.as_object_mut().unwrap().remove("hd");
+    claims
+}
+
+async fn insert_pengguna_only(db: &PgPool, email: &str) -> i32 {
+    sqlx::query_scalar("INSERT INTO pengguna (email) VALUES ($1) RETURNING id_pengguna")
+        .bind(email)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+async fn register_tim_mb(db: &PgPool, email: &str) -> i32 {
+    let id_pengguna = insert_pengguna_only(db, email).await;
+    sqlx::query("INSERT INTO tim_mb (id_pengguna, nama) VALUES ($1, 'Tim MB')")
+        .bind(id_pengguna)
+        .execute(db)
+        .await
+        .unwrap();
+    id_pengguna
+}
+
+async fn google_sub_of(db: &PgPool, id_pengguna: i32) -> Option<String> {
+    sqlx::query_scalar("SELECT google_sub FROM pengguna WHERE id_pengguna = $1")
+        .bind(id_pengguna)
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+async fn login_with(db: &PgPool, claims: Value) -> Response<Body> {
+    let mock = app_with_google(db.clone(), claims).await;
+    send(mock.router, "GET", CALLBACK, Some(STATE_COOKIE)).await
+}
+
+#[sqlx::test]
+async fn registered_tim_mb_logs_in_with_gmail_and_goes_to_their_pages(db: PgPool) {
+    let id_pengguna = register_tim_mb(&db, TIM_MB_EMAIL).await;
+    let mock = app_with_google(db.clone(), tim_mb_claims()).await;
+
+    let response = send(mock.router.clone(), "GET", CALLBACK, Some(STATE_COOKIE)).await;
+
+    assert_eq!(location(&response), "http://frontend.test/tim-mb");
+    assert_eq!(
+        google_sub_of(&db, id_pengguna).await.as_deref(),
+        Some("tim-mb-google-sub")
+    );
+    assert_eq!(token_count(&db).await, 1);
+
+    let (access, _) = token_cookies(&response);
+    let me = send(mock.router.clone(), "GET", "/auth/me", Some(&access)).await;
+    assert_eq!(me.status(), StatusCode::OK);
+
+    assert_eq!(row_counts(&db).await, (1, 0), "no mahasiswa row for Tim MB");
+    let data = send(mock.router, "GET", "/api/v1/mahasiswa/data", Some(&access)).await;
+    assert_eq!(data.status(), StatusCode::FORBIDDEN);
+}
+
+#[sqlx::test]
+async fn tim_mb_can_log_in_again_and_email_case_does_not_matter(db: PgPool) {
+    register_tim_mb(&db, "Tim.MB@gmail.com").await;
+
+    for _ in 0..2 {
+        let response = login_with(&db, tim_mb_claims()).await;
+        assert_eq!(location(&response), "http://frontend.test/tim-mb");
+    }
+
+    assert_eq!(row_counts(&db).await, (1, 0));
+}
+
+#[sqlx::test]
+async fn another_google_account_cannot_take_over_a_tim_mb_row(db: PgPool) {
+    let id_pengguna = register_tim_mb(&db, TIM_MB_EMAIL).await;
+    login_with(&db, tim_mb_claims()).await;
+
+    let mut claims = tim_mb_claims();
+    claims["sub"] = json!("attacker-google-sub");
+    let response = login_with(&db, claims).await;
+
+    assert_eq!(
+        location(&response),
+        "http://frontend.test/login?error=not_registered"
+    );
+    assert!(set_cookie(response.headers(), "access_token").is_none());
+    assert_eq!(
+        google_sub_of(&db, id_pengguna).await.as_deref(),
+        Some("tim-mb-google-sub")
+    );
+    assert_eq!(token_count(&db).await, 1);
+}
+
+#[sqlx::test]
+async fn gmail_outside_tim_mb_is_rejected_without_creating_anything(db: PgPool) {
+    let response = login_with(&db, tim_mb_claims()).await;
+
+    assert_eq!(
+        location(&response),
+        "http://frontend.test/login?error=not_registered"
+    );
+    assert!(set_cookie(response.headers(), "access_token").is_none());
+    assert_eq!(row_counts(&db).await, (0, 0));
+    assert_eq!(token_count(&db).await, 0);
+}
+
+#[sqlx::test]
+async fn gmail_in_pengguna_but_not_in_tim_mb_is_rejected(db: PgPool) {
+    let id_pengguna = insert_pengguna_only(&db, TIM_MB_EMAIL).await;
+
+    let response = login_with(&db, tim_mb_claims()).await;
+
+    assert_eq!(
+        location(&response),
+        "http://frontend.test/login?error=not_registered"
+    );
+    assert_eq!(google_sub_of(&db, id_pengguna).await, None);
+    assert_eq!(token_count(&db).await, 0);
+}
+
+#[sqlx::test]
+async fn gmail_login_needs_a_verified_personal_account(db: PgPool) {
+    register_tim_mb(&db, TIM_MB_EMAIL).await;
+
+    let mut unverified = tim_mb_claims();
+    unverified["email_verified"] = json!(false);
+    let mut hosted = tim_mb_claims();
+    hosted["hd"] = json!("gmail.com");
+    let mut lookalike = tim_mb_claims();
+    lookalike["email"] = json!("tim.mb@evilgmail.com");
+
+    for claims in [unverified, hosted, lookalike] {
+        let response = login_with(&db, claims).await;
+        assert_eq!(
+            location(&response),
+            "http://frontend.test/login?error=domain"
+        );
+    }
+    assert_eq!(token_count(&db).await, 0);
 }
 
 #[sqlx::test]
@@ -337,6 +525,7 @@ async fn email_owned_by_another_google_account_cannot_log_in(db: PgPool) {
     );
     assert!(set_cookie(response.headers(), "access_token").is_none());
     assert_eq!(token_count(&db).await, 1);
+    assert_eq!(row_counts(&db).await, (1, 1));
 }
 
 #[sqlx::test]
@@ -454,6 +643,7 @@ async fn callback_location_with(db: PgPool, field: &str, value: Option<Value>) -
 
     assert!(set_cookie(response.headers(), "access_token").is_none());
     assert_eq!(token_count(&db).await, 0);
+    assert_eq!(row_counts(&db).await, (0, 0));
     location(&response).to_string()
 }
 
@@ -708,6 +898,42 @@ async fn logout_revokes_the_family_and_clears_cookies(db: PgPool) {
         refresh(&app, &other_device).await.status(),
         StatusCode::NO_CONTENT
     );
+}
+
+#[sqlx::test]
+async fn logout_deletes_every_row_of_the_login_including_rotated_tokens(db: PgPool) {
+    let (app, _, first) = login(db.clone()).await;
+    let (_, _, other_device) = login(db.clone()).await;
+    let (_, second) = token_cookies(&refresh(&app, &first).await);
+    let (_, third) = token_cookies(&refresh(&app, &second).await);
+    assert_eq!(token_count(&db).await, 4);
+
+    let response = send(app, "POST", "/auth/logout", Some(&third)).await;
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let remaining: Vec<Vec<u8>> = sqlx::query_scalar("SELECT hash_token FROM token_refresh")
+        .fetch_all(&db)
+        .await
+        .unwrap();
+    assert_eq!(remaining, [token_hash(&other_device)]);
+}
+
+#[sqlx::test]
+async fn logout_without_a_known_token_deletes_nothing_and_still_succeeds(db: PgPool) {
+    let (app, _, _) = login(db.clone()).await;
+
+    let unknown = send(
+        app.clone(),
+        "POST",
+        "/auth/logout",
+        Some("refresh_token=unknown"),
+    )
+    .await;
+    let without_cookie = send(app, "POST", "/auth/logout", None).await;
+
+    assert_eq!(unknown.status(), StatusCode::NO_CONTENT);
+    assert_eq!(without_cookie.status(), StatusCode::NO_CONTENT);
+    assert_eq!(token_count(&db).await, 1);
 }
 
 #[sqlx::test]

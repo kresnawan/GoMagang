@@ -11,7 +11,14 @@ const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const SCOPE: &str = "openid email";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const ISSUERS: [&str; 2] = ["accounts.google.com", "https://accounts.google.com"];
-const ALLOWED_DOMAIN: &str = "student.ub.ac.id";
+const STUDENT_DOMAIN: &str = "student.ub.ac.id";
+const GMAIL_DOMAIN: &str = "gmail.com";
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum AccountKind {
+    Mahasiswa,
+    TimMb,
+}
 
 pub struct GoogleClient {
     client_id: String,
@@ -51,7 +58,6 @@ impl GoogleClient {
                 ("redirect_uri", self.redirect_uri.as_str()),
                 ("response_type", "code"),
                 ("scope", SCOPE),
-                ("hd", ALLOWED_DOMAIN),
                 ("prompt", "select_account"),
                 ("state", state),
             ],
@@ -60,7 +66,7 @@ impl GoogleClient {
         .into()
     }
 
-    pub async fn exchange_code(&self, code: &str) -> Result<GoogleClaims, AppError> {
+    pub async fn exchange_code(&self, code: &str) -> Result<(GoogleClaims, AccountKind), AppError> {
         let response = self
             .http
             .post(&self.token_url)
@@ -91,9 +97,9 @@ impl GoogleClient {
         })?;
 
         let claims = decode_claims(&token.id_token, &self.client_id)?;
-        check_allowed(&claims)?;
+        let kind = account_kind(&claims)?;
 
-        Ok(claims)
+        Ok((claims, kind))
     }
 }
 
@@ -114,17 +120,19 @@ fn decode_claims(id_token: &str, client_id: &str) -> Result<GoogleClaims, AppErr
     }
 }
 
-fn check_allowed(claims: &GoogleClaims) -> Result<(), AppError> {
-    let email_allowed = claims
-        .email
-        .to_ascii_lowercase()
-        .strip_suffix(ALLOWED_DOMAIN)
-        .is_some_and(|local| local.ends_with('@'));
-    let hosted_domain_allowed = claims.hd.as_deref() == Some(ALLOWED_DOMAIN);
+// A gmail.com address only says who the account belongs to. Whether it's really Tim MB is
+// decided by the tim_mb table when the session starts.
+fn account_kind(claims: &GoogleClaims) -> Result<AccountKind, AppError> {
+    if !claims.email_verified {
+        return Err(AppError::Forbidden);
+    }
 
-    if claims.email_verified && email_allowed && hosted_domain_allowed {
-        Ok(())
-    } else {
-        Err(AppError::Forbidden)
+    let email = claims.email.to_ascii_lowercase();
+    let domain = email.rsplit_once('@').map(|(_, domain)| domain);
+
+    match (domain, claims.hd.as_deref()) {
+        (Some(STUDENT_DOMAIN), Some(STUDENT_DOMAIN)) => Ok(AccountKind::Mahasiswa),
+        (Some(GMAIL_DOMAIN), None) => Ok(AccountKind::TimMb),
+        _ => Err(AppError::Forbidden),
     }
 }

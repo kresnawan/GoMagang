@@ -1,5 +1,6 @@
 mod google;
 mod handler;
+mod middleware;
 mod model;
 mod repository;
 mod routes;
@@ -8,7 +9,8 @@ mod session;
 mod tests;
 
 pub use google::GoogleClient;
-pub use model::User;
-pub use repository::spawn_token_cleanup;
+pub use middleware::require_tim_mb;
+pub use model::{Peran, User};
+pub use repository::{find_peran, spawn_token_cleanup};
 pub use routes::routes;
 pub use session::SessionManager;

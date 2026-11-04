@@ -25,6 +25,12 @@ pub struct GoogleClaims {
     pub exp: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Peran {
+    Mahasiswa,
+    TimMb,
+}
+
 #[derive(Debug, Serialize, FromRow)]
 pub struct User {
     pub id_pengguna: i32,

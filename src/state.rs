@@ -15,6 +15,7 @@ pub struct AppState {
     pub sessions: Arc<SessionManager>,
     pub frontend_url: Arc<str>,
     pub cookie_secure: bool,
+    pub admin_secret: Option<Arc<str>>,
 }
 
 impl AppState {
@@ -25,6 +26,7 @@ impl AppState {
             sessions: Arc::new(SessionManager::new(config)),
             frontend_url: config.frontend_url.as_str().into(),
             cookie_secure: config.cookie_secure,
+            admin_secret: config.admin_secret.as_deref().map(Arc::from),
         }
     }
 }
