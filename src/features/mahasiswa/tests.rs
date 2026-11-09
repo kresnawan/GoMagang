@@ -24,6 +24,8 @@ fn config() -> Config {
         jwt_secret: JWT_SECRET.to_string(),
         admin_secret: None,
         cookie_secure: false,
+        upload_dir: Default::default(),
+        surat_signing_key: None,
     }
 }
 
@@ -525,7 +527,7 @@ async fn patch_needs_a_token_and_a_mahasiswa_row(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn browsers_are_allowed_to_send_patch(db: PgPool) {
+async fn browsers_are_allowed_to_send_patch_and_put(db: PgPool) {
     let config = Config {
         cors_allowed_origins: vec!["http://frontend.test".parse().unwrap()],
         ..config()
@@ -549,4 +551,5 @@ async fn browsers_are_allowed_to_send_patch(db: PgPool) {
         .to_str()
         .unwrap();
     assert!(methods.contains("PATCH"), "{methods}");
+    assert!(methods.contains("PUT"), "{methods}");
 }

@@ -28,6 +28,19 @@ pub struct Mahasiswa {
     pub semester: Option<i16>,
 }
 
+impl Mahasiswa {
+    /// Whether every data diri column has been filled in, as registering for a position requires.
+    pub fn is_lengkap(&self) -> bool {
+        self.nim.is_some()
+            && self.nama.is_some()
+            && self.program_studi.is_some()
+            && self.ipk.is_some()
+            && self.no_hp.is_some()
+            && self.jenis_kelamin.is_some()
+            && self.semester.is_some()
+    }
+}
+
 /// The columns a mahasiswa can change. A field that is left out keeps its current value.
 ///
 /// Sending `null` is rejected, and so are other fields such as `email`, so that a mistake in the

@@ -22,6 +22,8 @@ fn setup(db: PgPool) -> (Router, AppState) {
         jwt_secret: "test-secret-with-at-least-32-bytes!".to_string(),
         admin_secret: None,
         cookie_secure: false,
+        upload_dir: Default::default(),
+        surat_signing_key: None,
     };
     let state = AppState::new(&config, db);
     (app::build(&config, state.clone()), state)

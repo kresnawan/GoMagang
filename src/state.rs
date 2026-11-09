@@ -1,10 +1,14 @@
-use std::sync::Arc;
+use std::{path::Path, sync::Arc};
 
 use sqlx::PgPool;
 
 use crate::{
     config::Config,
-    features::auth::{GoogleClient, SessionManager},
+    features::{
+        auth::{GoogleClient, SessionManager},
+        pendaftaran::TautanBerkas,
+        surat_keterangan::PenandaSurat,
+    },
 };
 
 // Shared dependencies for handlers go here.
@@ -16,6 +20,9 @@ pub struct AppState {
     pub frontend_url: Arc<str>,
     pub cookie_secure: bool,
     pub admin_secret: Option<Arc<str>>,
+    pub upload_dir: Arc<Path>,
+    pub penanda_surat: Option<Arc<PenandaSurat>>,
+    pub tautan_berkas: Arc<TautanBerkas>,
 }
 
 impl AppState {
@@ -27,6 +34,12 @@ impl AppState {
             frontend_url: config.frontend_url.as_str().into(),
             cookie_secure: config.cookie_secure,
             admin_secret: config.admin_secret.as_deref().map(Arc::from),
+            upload_dir: config.upload_dir.as_path().into(),
+            penanda_surat: config
+                .surat_signing_key
+                .as_deref()
+                .map(|key| Arc::new(PenandaSurat::from_base64_seed(key))),
+            tautan_berkas: Arc::new(TautanBerkas::new(&config.jwt_secret)),
         }
     }
 }

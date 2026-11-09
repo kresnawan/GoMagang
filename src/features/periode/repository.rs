@@ -1,6 +1,8 @@
 use sqlx::PgPool;
 
-use super::model::{NewPeriode, Periode, StatusPeriode};
+use super::model::{
+    NewPeriode, Periode, StartCheck, StartResult, StatusPeriode, StopCheck, StopResult,
+};
 
 /// The periods matching the filters, newest first.
 ///
@@ -68,4 +70,108 @@ pub async fn create(db: &PgPool, periode: &NewPeriode) -> Result<Option<i32>, sq
     tx.commit().await?;
 
     Ok(id)
+}
+
+/// Moves waktu_mulai of a period that has not started to the current time in WIB, keeping
+/// waktu_tutup. The new range must not touch another period, the same rule as for a new one.
+pub async fn start(db: &PgPool, id: i32) -> Result<StartResult, sqlx::Error> {
+    let mut tx = db.begin().await?;
+
+    // Without the lock, two requests could both find the period not started yet.
+    sqlx::query("LOCK TABLE periode_pendaftaran IN SHARE ROW EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await?;
+
+    // clock_timestamp instead of now(), which stays at the time the transaction began and so
+    // would be behind a period started by whoever held the lock before this request.
+    let check: Option<StartCheck> = sqlx::query_as(
+        "WITH sekarang AS (
+             SELECT clock_timestamp() AT TIME ZONE 'Asia/Jakarta' AS waktu
+         )
+         SELECT t.waktu_mulai <= s.waktu AS sudah_dimulai,
+                t.waktu_tutup < s.waktu AS sudah_selesai,
+                EXISTS (
+                    SELECT 1
+                    FROM periode_pendaftaran p
+                    WHERE p.id_periode <> t.id_periode
+                      AND p.waktu_mulai <= t.waktu_tutup
+                      AND p.waktu_tutup >= s.waktu
+                ) AS beririsan
+         FROM periode_pendaftaran t, sekarang s
+         WHERE t.id_periode = $1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(check) = check else {
+        return Ok(StartResult::NotFound);
+    };
+    if check.sudah_selesai {
+        return Ok(StartResult::Finished);
+    }
+    if check.sudah_dimulai {
+        return Ok(StartResult::AlreadyRunning);
+    }
+    if check.beririsan {
+        return Ok(StartResult::Overlapping);
+    }
+
+    sqlx::query(
+        "UPDATE periode_pendaftaran
+         SET waktu_mulai = clock_timestamp() AT TIME ZONE 'Asia/Jakarta'
+         WHERE id_periode = $1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(StartResult::Started)
+}
+
+/// Moves waktu_tutup of a running period to the current time in WIB, keeping waktu_mulai. The range
+/// only gets shorter, so it cannot come to touch another period.
+pub async fn stop(db: &PgPool, id: i32) -> Result<StopResult, sqlx::Error> {
+    let mut tx = db.begin().await?;
+
+    // Without the lock, two requests could both find the period still running.
+    sqlx::query("LOCK TABLE periode_pendaftaran IN SHARE ROW EXCLUSIVE MODE")
+        .execute(&mut *tx)
+        .await?;
+
+    // clock_timestamp for the same reason as in `start`.
+    let check: Option<StopCheck> = sqlx::query_as(
+        "SELECT waktu_mulai <= clock_timestamp() AT TIME ZONE 'Asia/Jakarta' AS sudah_dimulai,
+                waktu_tutup < clock_timestamp() AT TIME ZONE 'Asia/Jakarta' AS sudah_selesai
+         FROM periode_pendaftaran
+         WHERE id_periode = $1",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some(check) = check else {
+        return Ok(StopResult::NotFound);
+    };
+    if check.sudah_selesai {
+        return Ok(StopResult::Finished);
+    }
+    if !check.sudah_dimulai {
+        return Ok(StopResult::NotStarted);
+    }
+
+    sqlx::query(
+        "UPDATE periode_pendaftaran
+         SET waktu_tutup = clock_timestamp() AT TIME ZONE 'Asia/Jakarta'
+         WHERE id_periode = $1",
+    )
+    .bind(id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(StopResult::Stopped)
 }

@@ -22,6 +22,8 @@ fn setup(db: PgPool) -> (Router, AppState) {
         jwt_secret: "test-secret-with-at-least-32-bytes!".to_string(),
         admin_secret: None,
         cookie_secure: false,
+        upload_dir: Default::default(),
+        surat_signing_key: None,
     };
     let state = AppState::new(&config, db);
     (app::build(&config, state.clone()), state)
@@ -97,17 +99,17 @@ async fn insert_posisi(
     id_perusahaan: i32,
     id_periode: i32,
     posisi: &str,
-    sisa_kuota: i32,
+    kuota: i32,
 ) -> i32 {
     sqlx::query_scalar(
         "INSERT INTO posisi_magang
-             (id_perusahaan, posisi, deskripsi_persyaratan, kuota_total, sisa_kuota, id_periode)
-         VALUES ($1, $2, 'Syarat', 5, $3, $4)
+             (id_perusahaan, posisi, deskripsi_persyaratan, kuota, id_periode)
+         VALUES ($1, $2, 'Syarat', $3, $4)
          RETURNING id_posisi",
     )
     .bind(id_perusahaan)
     .bind(posisi)
-    .bind(sisa_kuota)
+    .bind(kuota)
     .bind(id_periode)
     .fetch_one(db)
     .await
@@ -176,8 +178,7 @@ async fn returns_the_position_with_its_company(db: PgPool) {
             "id_posisi": posisi,
             "posisi": "Backend",
             "deskripsi_persyaratan": "Syarat",
-            "kuota_total": 5,
-            "sisa_kuota": 3,
+            "kuota": 3,
             "id_periode": periode,
             "perusahaan": { "id_perusahaan": company, "nama_perusahaan": "PT Satu" },
         }])
@@ -252,23 +253,18 @@ async fn returns_an_empty_list_when_there_are_no_periods(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn filters_by_quota_with_is_full(db: PgPool) {
+async fn the_quota_does_not_hide_any_position(db: PgPool) {
     let (app, state) = setup(db.clone());
     let cookie = mahasiswa_cookie(&db, &state).await;
     let periode = insert_periode(&db, "-1 minute", "1 minute").await;
     let company = insert_perusahaan(&db, "PT Satu").await;
-    insert_posisi(&db, company, periode, "A Penuh", 0).await;
-    insert_posisi(&db, company, periode, "B Tersedia", 2).await;
+    insert_posisi(&db, company, periode, "A", 1).await;
+    insert_posisi(&db, company, periode, "B", 2).await;
 
-    assert_eq!(
-        names(&app, &format!("{URI}?is_full=1"), &cookie).await,
-        ["A Penuh"]
-    );
-    assert_eq!(
-        names(&app, &format!("{URI}?is_full=0"), &cookie).await,
-        ["B Tersedia"]
-    );
-    assert_eq!(names(&app, URI, &cookie).await, ["A Penuh", "B Tersedia"]);
+    // is_full is gone along with the remaining quota, so it is ignored like any unknown query.
+    for uri in [URI.to_string(), format!("{URI}?is_full=1")] {
+        assert_eq!(names(&app, &uri, &cookie).await, ["A", "B"], "{uri}");
+    }
 }
 
 #[sqlx::test]
@@ -280,7 +276,7 @@ async fn filters_by_company_and_name(db: PgPool) {
     let second = insert_perusahaan(&db, "PT Dua").await;
     insert_posisi(&db, first, periode, "Backend Developer", 1).await;
     insert_posisi(&db, first, periode, "Data Analyst", 1).await;
-    insert_posisi(&db, second, periode, "Frontend Developer", 0).await;
+    insert_posisi(&db, second, periode, "Frontend Developer", 1).await;
 
     let cases = [
         (
@@ -300,10 +296,9 @@ async fn filters_by_company_and_name(db: PgPool) {
         (format!("{URI}?s=%25"), vec![]),
         (format!("{URI}?s=_"), vec![]),
         (
-            format!("{URI}?s=developer&p={second}&is_full=1"),
+            format!("{URI}?s=developer&p={second}"),
             vec!["Frontend Developer"],
         ),
-        (format!("{URI}?s=developer&p={second}&is_full=0"), vec![]),
     ];
 
     for (uri, expected) in cases {
@@ -316,7 +311,7 @@ async fn rejects_invalid_query_values(db: PgPool) {
     let (app, state) = setup(db.clone());
     let cookie = mahasiswa_cookie(&db, &state).await;
 
-    for query in ["is_full=2", "is_full=true", "p=abc", "id_periode=abc"] {
+    for query in ["p=abc", "id_periode=abc"] {
         let uri = format!("{URI}?{query}");
         let response = get(&app, &uri, Some(&cookie)).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{uri}");
@@ -379,12 +374,12 @@ fn new_posisi(id_perusahaan: i32, id_periode: i32) -> Value {
         "id_periode": id_periode,
         "posisi": "Backend Developer",
         "deskripsi_persyaratan": "Memahami REST API.",
-        "kuota_total": 5,
+        "kuota": 5,
     })
 }
 
 #[sqlx::test]
-async fn tim_mb_creates_a_position_with_its_whole_quota_available(db: PgPool) {
+async fn tim_mb_creates_a_position(db: PgPool) {
     let (app, state) = setup(db.clone());
     let cookie = tim_mb_cookie(&db, &state).await;
     let periode = insert_periode(&db, "-1 minute", "1 minute").await;
@@ -398,7 +393,7 @@ async fn tim_mb_creates_a_position_with_its_whole_quota_available(db: PgPool) {
             "id_periode": periode,
             "posisi": "  Backend Developer  ",
             "deskripsi_persyaratan": "  Memahami REST API.  ",
-            "kuota_total": 5,
+            "kuota": 5,
         }),
     )
     .await;
@@ -411,8 +406,7 @@ async fn tim_mb_creates_a_position_with_its_whole_quota_available(db: PgPool) {
             "id_posisi": created["id_posisi"],
             "posisi": "Backend Developer",
             "deskripsi_persyaratan": "Memahami REST API.",
-            "kuota_total": 5,
-            "sisa_kuota": 5,
+            "kuota": 5,
             "id_periode": periode,
             "perusahaan": { "id_perusahaan": company, "nama_perusahaan": "PT Satu" },
         })
@@ -464,8 +458,8 @@ async fn rejects_invalid_values_without_saving(db: PgPool) {
         with("posisi", json!("   ")),
         with("posisi", json!("x".repeat(256))),
         with("deskripsi_persyaratan", json!("   ")),
-        with("kuota_total", json!(0)),
-        with("kuota_total", json!(-1)),
+        with("kuota", json!(0)),
+        with("kuota", json!(-1)),
         with("id_perusahaan", json!(9999)),
         with("id_periode", json!(9999)),
     ];
@@ -481,9 +475,10 @@ async fn rejects_invalid_values_without_saving(db: PgPool) {
 
     let from_framework = [
         json!({}),
-        with("kuota_total", json!(1.5)),
-        with("kuota_total", json!("5")),
+        with("kuota", json!(1.5)),
+        with("kuota", json!("5")),
         with("posisi", Value::Null),
+        with("kuota_total", json!(5)),
         with("sisa_kuota", json!(100)),
     ];
     for body in from_framework {

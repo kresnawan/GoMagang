@@ -28,6 +28,8 @@ fn config(admin_secret: Option<&str>) -> Config {
         jwt_secret: "test-secret-with-at-least-32-bytes!".to_string(),
         admin_secret: admin_secret.map(str::to_string),
         cookie_secure: false,
+        upload_dir: Default::default(),
+        surat_signing_key: None,
     }
 }
 

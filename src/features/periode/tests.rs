@@ -22,6 +22,8 @@ fn setup(db: PgPool) -> (Router, AppState) {
         jwt_secret: "test-secret-with-at-least-32-bytes!".to_string(),
         admin_secret: None,
         cookie_secure: false,
+        upload_dir: Default::default(),
+        surat_signing_key: None,
     };
     let state = AppState::new(&config, db);
     (app::build(&config, state.clone()), state)
@@ -507,4 +509,438 @@ async fn the_middleware_only_guards_post_so_mahasiswa_can_still_read(db: PgPool)
     let cookie = mahasiswa_cookie(&db, &state).await;
 
     assert!(ids(&app, URI, &cookie).await.is_empty());
+}
+
+const OVERLAP: &str = "Periode tidak bisa dimulai karena beririsan dengan periode lain.";
+
+async fn start_periode(app: &Router, cookie: Option<&str>, id: &str) -> Response<Body> {
+    let mut request = Request::builder()
+        .method("PATCH")
+        .uri(format!("{URI}/{id}/start"));
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    app.clone()
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+/// The saved times, to check that a rejected request changed nothing.
+async fn saved_times(db: &PgPool, id: i32) -> (String, String) {
+    sqlx::query_as(
+        "SELECT waktu_mulai::text, waktu_tutup::text
+         FROM periode_pendaftaran
+         WHERE id_periode = $1",
+    )
+    .bind(id)
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
+async fn assert_start_conflict(app: &Router, db: &PgPool, cookie: &str, id: i32, message: &str) {
+    let before = saved_times(db, id).await;
+
+    let response = start_periode(app, Some(cookie), &id.to_string()).await;
+
+    assert_eq!(response.status(), StatusCode::CONFLICT, "{message}");
+    assert_eq!(json_body(response).await["message"], message);
+    assert_eq!(saved_times(db, id).await, before, "{message}");
+}
+
+#[sqlx::test]
+async fn tim_mb_starts_a_period_right_away(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let id: i32 = sqlx::query_scalar(
+        "INSERT INTO periode_pendaftaran (catatan, waktu_mulai, waktu_tutup)
+         VALUES ('Genap', now() AT TIME ZONE 'Asia/Jakarta' + interval '20 days', '2099-02-15 23:59:00')
+         RETURNING id_periode",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+    let response = start_periode(&app, Some(&cookie), &id.to_string()).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let started = json_body(response).await;
+    assert_eq!(started["id_periode"], id);
+    assert_eq!(started["catatan"], "Genap");
+    assert_eq!(started["status"], "berlangsung");
+    assert_eq!(started["waktu_tutup"], "2099-02-15T23:59:00+07:00");
+    assert!(started["waktu_mulai"].as_str().unwrap().ends_with("+07:00"));
+    assert_eq!(started.as_object().unwrap().len(), 5);
+
+    // The test database runs in UTC, so this also shows the time was saved in WIB.
+    let is_now_in_wib: bool = sqlx::query_scalar(
+        "SELECT abs(extract(epoch FROM now() AT TIME ZONE 'Asia/Jakarta' - waktu_mulai)) < 60
+         FROM periode_pendaftaran
+         WHERE id_periode = $1",
+    )
+    .bind(id)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(is_now_in_wib);
+
+    let response = get(&app, &format!("{URI}?id={id}"), Some(&cookie)).await;
+    assert_eq!(json_body(response).await, json!([started]));
+}
+
+#[sqlx::test]
+async fn mahasiswa_can_see_a_period_once_it_is_started(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let mahasiswa = mahasiswa_cookie(&db, &state).await;
+    let id = insert_periode(&db, "20 days", "30 days").await;
+
+    assert_eq!(ids(&app, URI, &mahasiswa).await, Vec::<i32>::new());
+
+    let response = start_periode(&app, Some(&tim_mb), &id.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert_eq!(ids(&app, URI, &mahasiswa).await, [id]);
+}
+
+#[sqlx::test]
+async fn cannot_start_a_period_that_is_running_or_finished(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let periods = seed_periods(&db).await;
+
+    assert_start_conflict(
+        &app,
+        &db,
+        &cookie,
+        periods.berlangsung,
+        "Periode ini sudah berlangsung.",
+    )
+    .await;
+    assert_start_conflict(
+        &app,
+        &db,
+        &cookie,
+        periods.selesai,
+        "Periode ini sudah selesai.",
+    )
+    .await;
+}
+
+#[sqlx::test]
+async fn starting_twice_is_rejected_the_second_time(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let id = insert_periode(&db, "20 days", "30 days").await;
+
+    let response = start_periode(&app, Some(&cookie), &id.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert_start_conflict(&app, &db, &cookie, id, "Periode ini sudah berlangsung.").await;
+}
+
+#[sqlx::test]
+async fn cannot_start_a_period_when_another_is_running(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    insert_periode(&db, "-1 day", "1 day").await;
+    let id = insert_periode(&db, "20 days", "30 days").await;
+
+    assert_start_conflict(&app, &db, &cookie, id, OVERLAP).await;
+}
+
+#[sqlx::test]
+async fn cannot_start_a_period_past_another_one_waiting_before_it(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    insert_periode(&db, "5 days", "6 days").await;
+    let id = insert_periode(&db, "20 days", "30 days").await;
+
+    assert_start_conflict(&app, &db, &cookie, id, OVERLAP).await;
+}
+
+#[sqlx::test]
+async fn periods_outside_the_new_range_do_not_block_starting(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    insert_periode(&db, "-30 days", "-20 days").await;
+    insert_periode(&db, "40 days", "50 days").await;
+    let id = insert_periode(&db, "20 days", "30 days").await;
+
+    let response = start_periode(&app, Some(&cookie), &id.to_string()).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[sqlx::test]
+async fn only_one_of_several_concurrent_starts_wins(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let id = insert_periode(&db, "20 days", "30 days").await.to_string();
+
+    let (a, b, c, d) = tokio::join!(
+        start_periode(&app, Some(&cookie), &id),
+        start_periode(&app, Some(&cookie), &id),
+        start_periode(&app, Some(&cookie), &id),
+        start_periode(&app, Some(&cookie), &id),
+    );
+
+    let statuses = [a.status(), b.status(), c.status(), d.status()];
+    let started = statuses.iter().filter(|s| **s == StatusCode::OK).count();
+    let conflicts = statuses
+        .iter()
+        .filter(|s| **s == StatusCode::CONFLICT)
+        .count();
+    assert_eq!((started, conflicts), (1, 3));
+}
+
+#[sqlx::test]
+async fn starting_something_missing_finds_nothing(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+
+    let response = start_periode(&app, Some(&cookie), "999999").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = start_periode(&app, Some(&cookie), "abc").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test]
+async fn only_tim_mb_can_start_periods(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let id = insert_periode(&db, "20 days", "30 days").await;
+    let before = saved_times(&db, id).await;
+    let uri_id = id.to_string();
+
+    let response = start_periode(&app, None, &uri_id).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = start_periode(&app, Some("access_token=not-a-jwt"), &uri_id).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let mahasiswa = mahasiswa_cookie(&db, &state).await;
+    let response = start_periode(&app, Some(&mahasiswa), &uri_id).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let user = insert_pengguna(&db, "tanpa.peran@gmail.com").await;
+    let no_role = cookie_for(&state, &user);
+    let response = start_periode(&app, Some(&no_role), &uri_id).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    assert_eq!(saved_times(&db, id).await, before);
+}
+
+async fn stop_periode(app: &Router, cookie: Option<&str>, id: &str) -> Response<Body> {
+    let mut request = Request::builder()
+        .method("PATCH")
+        .uri(format!("{URI}/{id}/stop"));
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    app.clone()
+        .oneshot(request.body(Body::empty()).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn assert_stop_conflict(app: &Router, db: &PgPool, cookie: &str, id: i32, message: &str) {
+    let before = saved_times(db, id).await;
+
+    let response = stop_periode(app, Some(cookie), &id.to_string()).await;
+
+    assert_eq!(response.status(), StatusCode::CONFLICT, "{message}");
+    assert_eq!(json_body(response).await["message"], message);
+    assert_eq!(saved_times(db, id).await, before, "{message}");
+}
+
+#[sqlx::test]
+async fn tim_mb_stops_a_running_period_right_away(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let id: i32 = sqlx::query_scalar(
+        "INSERT INTO periode_pendaftaran (catatan, waktu_mulai, waktu_tutup)
+         VALUES ('Genap', '2020-01-05 08:30:00', now() AT TIME ZONE 'Asia/Jakarta' + interval '20 days')
+         RETURNING id_periode",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+    let response = stop_periode(&app, Some(&cookie), &id.to_string()).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let stopped = json_body(response).await;
+    assert_eq!(stopped["id_periode"], id);
+    assert_eq!(stopped["catatan"], "Genap");
+    assert_eq!(stopped["status"], "selesai");
+    assert_eq!(stopped["waktu_mulai"], "2020-01-05T08:30:00+07:00");
+    assert!(stopped["waktu_tutup"].as_str().unwrap().ends_with("+07:00"));
+    assert_eq!(stopped.as_object().unwrap().len(), 5);
+
+    // The test database runs in UTC, so this also shows the time was saved in WIB.
+    let is_now_in_wib: bool = sqlx::query_scalar(
+        "SELECT abs(extract(epoch FROM now() AT TIME ZONE 'Asia/Jakarta' - waktu_tutup)) < 60
+         FROM periode_pendaftaran
+         WHERE id_periode = $1",
+    )
+    .bind(id)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(is_now_in_wib);
+
+    let response = get(&app, &format!("{URI}?id={id}"), Some(&cookie)).await;
+    assert_eq!(json_body(response).await, json!([stopped]));
+}
+
+#[sqlx::test]
+async fn mahasiswa_stops_seeing_a_period_once_it_is_stopped(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let mahasiswa = mahasiswa_cookie(&db, &state).await;
+    let id = insert_periode(&db, "-1 day", "1 day").await;
+
+    assert_eq!(ids(&app, URI, &mahasiswa).await, [id]);
+
+    let response = stop_periode(&app, Some(&tim_mb), &id.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert_eq!(ids(&app, URI, &mahasiswa).await, Vec::<i32>::new());
+}
+
+#[sqlx::test]
+async fn cannot_stop_a_period_that_is_not_running(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let periods = seed_periods(&db).await;
+
+    assert_stop_conflict(
+        &app,
+        &db,
+        &cookie,
+        periods.belum_dimulai,
+        "Periode ini belum dimulai.",
+    )
+    .await;
+    assert_stop_conflict(
+        &app,
+        &db,
+        &cookie,
+        periods.selesai,
+        "Periode ini sudah selesai.",
+    )
+    .await;
+}
+
+#[sqlx::test]
+async fn stopping_twice_is_rejected_the_second_time(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let id = insert_periode(&db, "-1 day", "1 day").await;
+
+    let response = stop_periode(&app, Some(&cookie), &id.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert_stop_conflict(&app, &db, &cookie, id, "Periode ini sudah selesai.").await;
+}
+
+#[sqlx::test]
+async fn stopping_a_period_clears_the_way_for_starting_the_next(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let running = insert_periode(&db, "-1 day", "1 day").await;
+    let next = insert_periode(&db, "20 days", "30 days").await;
+
+    assert_start_conflict(&app, &db, &cookie, next, OVERLAP).await;
+
+    let response = stop_periode(&app, Some(&cookie), &running.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = start_periode(&app, Some(&cookie), &next.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[sqlx::test]
+async fn a_stopped_period_cannot_be_started_again(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let id = insert_periode(&db, "-1 day", "1 day").await;
+
+    let response = stop_periode(&app, Some(&cookie), &id.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    assert_start_conflict(&app, &db, &cookie, id, "Periode ini sudah selesai.").await;
+}
+
+#[sqlx::test]
+async fn a_started_period_can_be_stopped(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let id = insert_periode(&db, "20 days", "30 days").await.to_string();
+
+    let response = start_periode(&app, Some(&cookie), &id).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let response = stop_periode(&app, Some(&cookie), &id).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await["status"], "selesai");
+}
+
+#[sqlx::test]
+async fn only_one_of_several_concurrent_stops_wins(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let id = insert_periode(&db, "-1 day", "1 day").await.to_string();
+
+    let (a, b, c, d) = tokio::join!(
+        stop_periode(&app, Some(&cookie), &id),
+        stop_periode(&app, Some(&cookie), &id),
+        stop_periode(&app, Some(&cookie), &id),
+        stop_periode(&app, Some(&cookie), &id),
+    );
+
+    let statuses = [a.status(), b.status(), c.status(), d.status()];
+    let stopped = statuses.iter().filter(|s| **s == StatusCode::OK).count();
+    let conflicts = statuses
+        .iter()
+        .filter(|s| **s == StatusCode::CONFLICT)
+        .count();
+    assert_eq!((stopped, conflicts), (1, 3));
+}
+
+#[sqlx::test]
+async fn stopping_something_missing_finds_nothing(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+
+    let response = stop_periode(&app, Some(&cookie), "999999").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = stop_periode(&app, Some(&cookie), "abc").await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test]
+async fn only_tim_mb_can_stop_periods(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let id = insert_periode(&db, "-1 day", "1 day").await;
+    let before = saved_times(&db, id).await;
+    let uri_id = id.to_string();
+
+    let response = stop_periode(&app, None, &uri_id).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let response = stop_periode(&app, Some("access_token=not-a-jwt"), &uri_id).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+    let mahasiswa = mahasiswa_cookie(&db, &state).await;
+    let response = stop_periode(&app, Some(&mahasiswa), &uri_id).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    let user = insert_pengguna(&db, "tanpa.peran@gmail.com").await;
+    let no_role = cookie_for(&state, &user);
+    let response = stop_periode(&app, Some(&no_role), &uri_id).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+
+    assert_eq!(saved_times(&db, id).await, before);
 }

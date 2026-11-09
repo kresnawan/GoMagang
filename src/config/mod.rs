@@ -1,10 +1,13 @@
 pub mod cors;
 
+use std::path::PathBuf;
+
 use axum::http::HeaderValue;
 
 const DEFAULT_CORS_ALLOWED_ORIGINS: &str = "http://localhost:5173";
 const DEFAULT_GOOGLE_REDIRECT_URI: &str = "http://localhost:3000/auth/google";
 const DEFAULT_FRONTEND_URL: &str = "http://localhost:5173";
+const DEFAULT_UPLOAD_DIR: &str = "uploads";
 const MIN_JWT_SECRET_LEN: usize = 32;
 const MIN_ADMIN_SECRET_LEN: usize = 32;
 
@@ -18,6 +21,10 @@ pub struct Config {
     pub jwt_secret: String,
     pub admin_secret: Option<String>,
     pub cookie_secure: bool,
+    pub upload_dir: PathBuf,
+    /// Base64 of the 32-byte Ed25519 seed that signs surat keterangan. Without it, surat
+    /// keterangan cannot be issued or verified.
+    pub surat_signing_key: Option<String>,
 }
 
 impl Config {
@@ -57,6 +64,12 @@ impl Config {
             frontend_url: frontend_url.trim_end_matches('/').to_string(),
             jwt_secret,
             admin_secret,
+            upload_dir: std::env::var("UPLOAD_DIR")
+                .unwrap_or_else(|_| DEFAULT_UPLOAD_DIR.to_string())
+                .into(),
+            surat_signing_key: std::env::var("SURAT_SIGNING_KEY")
+                .ok()
+                .filter(|key| !key.is_empty()),
         }
     }
 }

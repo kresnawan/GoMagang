@@ -39,6 +39,8 @@ fn config() -> Config {
         jwt_secret: JWT_SECRET.to_string(),
         admin_secret: None,
         cookie_secure: false,
+        upload_dir: Default::default(),
+        surat_signing_key: None,
     }
 }
 
@@ -271,6 +273,7 @@ async fn callback_sets_both_cookies_and_me_accepts_the_access_token(db: PgPool) 
 async fn cookies_are_secure_when_configured() {
     let config = Config {
         cookie_secure: true,
+        upload_dir: Default::default(),
         ..config()
     };
     let response = send(app_without_db(&config), "GET", "/auth/google/login", None).await;

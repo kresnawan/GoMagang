@@ -39,6 +39,38 @@ pub struct Periode {
     pub status: String,
 }
 
+/// What became of a request to start a period right away.
+#[derive(Debug, PartialEq)]
+pub enum StartResult {
+    Started,
+    NotFound,
+    AlreadyRunning,
+    Finished,
+    Overlapping,
+}
+
+#[derive(Debug, FromRow)]
+pub struct StartCheck {
+    pub sudah_dimulai: bool,
+    pub sudah_selesai: bool,
+    pub beririsan: bool,
+}
+
+/// What became of a request to stop a period right away.
+#[derive(Debug, PartialEq)]
+pub enum StopResult {
+    Stopped,
+    NotFound,
+    NotStarted,
+    Finished,
+}
+
+#[derive(Debug, FromRow)]
+pub struct StopCheck {
+    pub sudah_dimulai: bool,
+    pub sudah_selesai: bool,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CreatePeriode {

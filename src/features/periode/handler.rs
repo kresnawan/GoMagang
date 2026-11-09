@@ -1,11 +1,11 @@
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 
 use super::{
-    model::{CreatePeriode, Periode, PeriodeQuery, StatusPeriode},
+    model::{CreatePeriode, Periode, PeriodeQuery, StartResult, StatusPeriode, StopResult},
     repository,
 };
 use crate::{
@@ -53,4 +53,55 @@ pub async fn create(
         .ok_or(AppError::Internal)?;
 
     Ok((StatusCode::CREATED, Json(created)))
+}
+
+pub async fn start(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<Periode>, AppError> {
+    match repository::start(&state.db, id).await? {
+        StartResult::Started => {}
+        StartResult::NotFound => return Err(AppError::NotFound),
+        StartResult::AlreadyRunning => {
+            return Err(AppError::Conflict("Periode ini sudah berlangsung."));
+        }
+        StartResult::Finished => {
+            return Err(AppError::Conflict("Periode ini sudah selesai."));
+        }
+        StartResult::Overlapping => {
+            return Err(AppError::Conflict(
+                "Periode tidak bisa dimulai karena beririsan dengan periode lain.",
+            ));
+        }
+    }
+
+    let started = repository::list(&state.db, Some(id), None)
+        .await?
+        .pop()
+        .ok_or(AppError::Internal)?;
+
+    Ok(Json(started))
+}
+
+pub async fn stop(
+    State(state): State<AppState>,
+    Path(id): Path<i32>,
+) -> Result<Json<Periode>, AppError> {
+    match repository::stop(&state.db, id).await? {
+        StopResult::Stopped => {}
+        StopResult::NotFound => return Err(AppError::NotFound),
+        StopResult::NotStarted => {
+            return Err(AppError::Conflict("Periode ini belum dimulai."));
+        }
+        StopResult::Finished => {
+            return Err(AppError::Conflict("Periode ini sudah selesai."));
+        }
+    }
+
+    let stopped = repository::list(&state.db, Some(id), None)
+        .await?
+        .pop()
+        .ok_or(AppError::Internal)?;
+
+    Ok(Json(stopped))
 }
