@@ -181,6 +181,7 @@ async fn returns_the_position_with_its_company(db: PgPool) {
             "kuota": 3,
             "id_periode": periode,
             "perusahaan": { "id_perusahaan": company, "nama_perusahaan": "PT Satu" },
+            "deleted_at": null,
         }])
     );
 }
@@ -409,6 +410,7 @@ async fn tim_mb_creates_a_position(db: PgPool) {
             "kuota": 5,
             "id_periode": periode,
             "perusahaan": { "id_perusahaan": company, "nama_perusahaan": "PT Satu" },
+            "deleted_at": null,
         })
     );
     assert!(created["id_posisi"].is_i64());
@@ -534,4 +536,417 @@ async fn only_tim_mb_can_create_positions(db: PgPool) {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
     assert_eq!(posisi_count(&db).await, 0);
+}
+
+async fn hide_perusahaan(db: &PgPool, id_perusahaan: i32) {
+    sqlx::query("UPDATE perusahaan_mitra SET deleted_at = now() WHERE id_perusahaan = $1")
+        .bind(id_perusahaan)
+        .execute(db)
+        .await
+        .unwrap();
+}
+
+#[sqlx::test]
+async fn positions_of_a_hidden_company_are_left_out(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let mahasiswa = mahasiswa_cookie(&db, &state).await;
+    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let periode = insert_periode(&db, "-1 minute", "1 minute").await;
+    let tetap = insert_perusahaan(&db, "PT Tetap").await;
+    let hilang = insert_perusahaan(&db, "PT Hilang").await;
+    insert_posisi(&db, tetap, periode, "Backend", 1).await;
+    insert_posisi(&db, hilang, periode, "Frontend", 1).await;
+
+    hide_perusahaan(&db, hilang).await;
+
+    for cookie in [&mahasiswa, &tim_mb] {
+        assert_eq!(names(&app, URI, cookie).await, ["Backend"]);
+        assert_eq!(
+            names(&app, &format!("{URI}?p={hilang}"), cookie).await,
+            Vec::<String>::new()
+        );
+    }
+    assert_eq!(posisi_count(&db).await, 2);
+}
+
+#[sqlx::test]
+async fn a_hidden_company_takes_no_new_positions(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = tim_mb_cookie(&db, &state).await;
+    let periode = insert_periode(&db, "-1 minute", "1 minute").await;
+    let company = insert_perusahaan(&db, "PT Satu").await;
+    hide_perusahaan(&db, company).await;
+
+    let response = post_posisi(
+        &app,
+        Some(&cookie),
+        json!({
+            "id_perusahaan": company,
+            "id_periode": periode,
+            "posisi": "Backend",
+            "deskripsi_persyaratan": "Syarat",
+            "kuota": 1,
+        }),
+    )
+    .await;
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        json_body(response).await["message"],
+        "Perusahaan tidak ditemukan."
+    );
+    assert_eq!(posisi_count(&db).await, 0);
+}
+
+async fn send(
+    app: &Router,
+    method: &str,
+    uri: &str,
+    cookie: Option<&str>,
+    body: Option<Value>,
+) -> Response<Body> {
+    let mut request = Request::builder().method(method).uri(uri);
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    let body = match body {
+        Some(body) => {
+            request = request.header(header::CONTENT_TYPE, "application/json");
+            Body::from(body.to_string())
+        }
+        None => Body::empty(),
+    };
+    app.clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap()
+}
+
+fn isi_baru() -> Value {
+    json!({
+        "posisi": "  Frontend Developer  ",
+        "deskripsi_persyaratan": "  Menguasai React.  ",
+        "kuota": 8,
+    })
+}
+
+async fn ubah(app: &Router, cookie: Option<&str>, id: i32, body: Value) -> Response<Body> {
+    send(app, "PATCH", &format!("{URI}/{id}"), cookie, Some(body)).await
+}
+
+async fn sembunyikan(app: &Router, cookie: Option<&str>, id: i32) -> Response<Body> {
+    send(app, "DELETE", &format!("{URI}/{id}"), cookie, None).await
+}
+
+/// One running position of PT Satu, with the cookies of a mahasiswa and of Tim MB.
+struct Katalog {
+    app: Router,
+    db: PgPool,
+    mahasiswa: String,
+    tim_mb: String,
+    periode: i32,
+    company: i32,
+}
+
+async fn katalog(db: PgPool) -> Katalog {
+    let (app, state) = setup(db.clone());
+    Katalog {
+        mahasiswa: mahasiswa_cookie(&db, &state).await,
+        tim_mb: tim_mb_cookie(&db, &state).await,
+        periode: insert_periode(&db, "-1 minute", "1 minute").await,
+        company: insert_perusahaan(&db, "PT Satu").await,
+        app,
+        db,
+    }
+}
+
+impl Katalog {
+    async fn posisi(&self, nama: &str) -> i32 {
+        insert_posisi(&self.db, self.company, self.periode, nama, 3).await
+    }
+
+    async fn stored(&self, id: i32) -> (String, String, i32, i32, i32, bool) {
+        sqlx::query_as(
+            "SELECT posisi, deskripsi_persyaratan, kuota, id_perusahaan, id_periode,
+                    deleted_at IS NOT NULL
+             FROM posisi_magang WHERE id_posisi = $1",
+        )
+        .bind(id)
+        .fetch_one(&self.db)
+        .await
+        .unwrap()
+    }
+}
+
+#[sqlx::test]
+async fn tim_mb_changes_the_name_description_and_quota(db: PgPool) {
+    let k = katalog(db).await;
+    let id = k.posisi("Backend").await;
+
+    let response = ubah(&k.app, Some(&k.tim_mb), id, isi_baru()).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(response).await,
+        json!({
+            "id_posisi": id,
+            "posisi": "Frontend Developer",
+            "deskripsi_persyaratan": "Menguasai React.",
+            "kuota": 8,
+            "id_periode": k.periode,
+            "perusahaan": { "id_perusahaan": k.company, "nama_perusahaan": "PT Satu" },
+            "deleted_at": null,
+        })
+    );
+    for cookie in [&k.mahasiswa, &k.tim_mb] {
+        assert_eq!(names(&k.app, URI, cookie).await, ["Frontend Developer"]);
+    }
+    assert_eq!(posisi_count(&k.db).await, 1);
+}
+
+#[sqlx::test]
+async fn the_company_and_period_of_a_position_cannot_be_changed(db: PgPool) {
+    let k = katalog(db).await;
+    let id = k.posisi("Backend").await;
+    let before = k.stored(id).await;
+    let lain = insert_perusahaan(&k.db, "PT Lain").await;
+    let periode_lain = insert_periode(&k.db, "1 day", "2 days").await;
+
+    for (field, value) in [("id_perusahaan", lain), ("id_periode", periode_lain)] {
+        let mut body = isi_baru();
+        body[field] = json!(value);
+        let response = ubah(&k.app, Some(&k.tim_mb), id, body).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{field}"
+        );
+    }
+
+    assert_eq!(k.stored(id).await, before);
+}
+
+#[sqlx::test]
+async fn changing_rejects_bad_values_without_saving(db: PgPool) {
+    let k = katalog(db).await;
+    let id = k.posisi("Backend").await;
+    let before = k.stored(id).await;
+
+    let cases = [
+        (
+            "posisi",
+            json!("   "),
+            "Posisi harus berisi 1-255 karakter.",
+        ),
+        (
+            "posisi",
+            json!("x".repeat(256)),
+            "Posisi harus berisi 1-255 karakter.",
+        ),
+        (
+            "deskripsi_persyaratan",
+            json!(" "),
+            "Deskripsi persyaratan wajib diisi.",
+        ),
+        ("kuota", json!(0), "Kuota minimal 1."),
+    ];
+    for (field, value, message) in cases {
+        let mut body = isi_baru();
+        body[field] = value;
+        let response = ubah(&k.app, Some(&k.tim_mb), id, body).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{field}"
+        );
+        assert_eq!(json_body(response).await["message"], message, "{field}");
+    }
+
+    // A field left out is rejected too, as every field is replaced.
+    let mut body = isi_baru();
+    body.as_object_mut().unwrap().remove("kuota");
+    let response = ubah(&k.app, Some(&k.tim_mb), id, body).await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let response = send(
+        &k.app,
+        "PATCH",
+        &format!("{URI}/abc"),
+        Some(&k.tim_mb),
+        Some(isi_baru()),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    let response = ubah(&k.app, Some(&k.tim_mb), 999_999, isi_baru()).await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    assert_eq!(k.stored(id).await, before);
+}
+
+#[sqlx::test]
+async fn hiding_a_position_takes_it_out_of_the_catalog_but_keeps_its_row(db: PgPool) {
+    let k = katalog(db).await;
+    let tetap = k.posisi("Backend").await;
+    let hilang = k.posisi("Frontend").await;
+
+    let response = sembunyikan(&k.app, Some(&k.tim_mb), hilang).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let hidden = json_body(response).await;
+    assert_eq!(hidden["id_posisi"], hilang);
+    assert_eq!(hidden["posisi"], "Frontend");
+    let deleted_at = hidden["deleted_at"].as_str().unwrap();
+    assert!(deleted_at.ends_with("+07:00"), "{deleted_at}");
+
+    // The time is WIB, whatever the database server's own time zone.
+    let is_wib: bool = sqlx::query_scalar(
+        "SELECT deleted_at BETWEEN (now() AT TIME ZONE 'Asia/Jakarta') - interval '1 minute'
+                            AND (now() AT TIME ZONE 'Asia/Jakarta') + interval '1 minute'
+         FROM posisi_magang WHERE id_posisi = $1",
+    )
+    .bind(hilang)
+    .fetch_one(&k.db)
+    .await
+    .unwrap();
+    assert!(is_wib);
+
+    for cookie in [&k.mahasiswa, &k.tim_mb] {
+        assert_eq!(names(&k.app, URI, cookie).await, ["Backend"]);
+    }
+    assert_eq!(posisi_count(&k.db).await, 2);
+    let _ = tetap;
+}
+
+#[sqlx::test]
+async fn tim_mb_can_list_the_hidden_positions_after_the_others(db: PgPool) {
+    let k = katalog(db).await;
+    let awal = k.posisi("Analis").await;
+    k.posisi("Zebra").await;
+    k.posisi("Backend").await;
+    assert_eq!(
+        sembunyikan(&k.app, Some(&k.tim_mb), awal).await.status(),
+        StatusCode::OK
+    );
+
+    let uri = format!("{URI}?termasuk_dihapus=true");
+    assert_eq!(
+        names(&k.app, &uri, &k.tim_mb).await,
+        ["Backend", "Zebra", "Analis"]
+    );
+    let list = json_body(get(&k.app, &uri, Some(&k.tim_mb)).await).await;
+    assert!(list[0]["deleted_at"].is_null());
+    assert!(list[2]["deleted_at"].is_string());
+
+    // The other filters still apply.
+    let uri = format!("{URI}?termasuk_dihapus=true&s=analis");
+    assert_eq!(names(&k.app, &uri, &k.tim_mb).await, ["Analis"]);
+
+    // Only asking for the hidden ones is Tim MB's alone.
+    let response = get(
+        &k.app,
+        &format!("{URI}?termasuk_dihapus=true"),
+        Some(&k.mahasiswa),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let uri = format!("{URI}?termasuk_dihapus=false");
+    assert_eq!(
+        names(&k.app, &uri, &k.mahasiswa).await,
+        ["Backend", "Zebra"]
+    );
+
+    let response = get(
+        &k.app,
+        &format!("{URI}?termasuk_dihapus=ya"),
+        Some(&k.tim_mb),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+}
+
+#[sqlx::test]
+async fn a_hidden_position_cannot_be_hidden_or_changed_again(db: PgPool) {
+    let k = katalog(db).await;
+    let id = k.posisi("Backend").await;
+    assert_eq!(
+        sembunyikan(&k.app, Some(&k.tim_mb), id).await.status(),
+        StatusCode::OK
+    );
+    let before = k.stored(id).await;
+
+    assert_eq!(
+        sembunyikan(&k.app, Some(&k.tim_mb), id).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        sembunyikan(&k.app, Some(&k.tim_mb), 999_999).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        ubah(&k.app, Some(&k.tim_mb), id, isi_baru()).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let response = send(
+        &k.app,
+        "DELETE",
+        &format!("{URI}/abc"),
+        Some(&k.tim_mb),
+        None,
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+    assert_eq!(k.stored(id).await, before);
+}
+
+#[sqlx::test]
+async fn a_position_of_a_hidden_company_cannot_be_changed_or_hidden(db: PgPool) {
+    let k = katalog(db).await;
+    let id = k.posisi("Backend").await;
+    hide_perusahaan(&k.db, k.company).await;
+    let before = k.stored(id).await;
+
+    assert_eq!(
+        ubah(&k.app, Some(&k.tim_mb), id, isi_baru()).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        sembunyikan(&k.app, Some(&k.tim_mb), id).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    // Nor listed, even with the hidden positions.
+    let uri = format!("{URI}?termasuk_dihapus=true");
+    assert_eq!(names(&k.app, &uri, &k.tim_mb).await, Vec::<String>::new());
+
+    assert_eq!(k.stored(id).await, before);
+}
+
+#[sqlx::test]
+async fn only_tim_mb_can_change_or_hide_a_position(db: PgPool) {
+    let k = katalog(db).await;
+    let id = k.posisi("Backend").await;
+    let user = insert_pengguna(&k.db, "tanpa.peran@gmail.com").await;
+    let (_, state) = setup(k.db.clone());
+    let no_role = cookie_for(&state, &user);
+    let before = k.stored(id).await;
+
+    assert_eq!(
+        ubah(&k.app, None, id, isi_baru()).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        sembunyikan(&k.app, None, id).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    for cookie in [&k.mahasiswa, &no_role] {
+        assert_eq!(
+            ubah(&k.app, Some(cookie), id, isi_baru()).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            sembunyikan(&k.app, Some(cookie), id).await.status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+
+    assert_eq!(k.stored(id).await, before);
 }

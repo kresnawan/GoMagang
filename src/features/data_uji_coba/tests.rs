@@ -931,3 +931,47 @@ async fn seeding_again_adds_50_more_and_deleting_removes_every_file(db: PgPool) 
     assert_eq!(ctx.count("pengguna").await, 0);
     assert_eq!(std::fs::read_dir(ctx.uploads()).unwrap().count(), 0);
 }
+
+#[sqlx::test]
+async fn seeding_leaves_out_hidden_positions_and_positions_of_hidden_companies(db: PgPool) {
+    let ctx = setup(db);
+    let terbuka = ctx.posisi(5).await;
+    let posisi_hilang = ctx.posisi(5).await;
+    let perusahaan_hilang = ctx.posisi(5).await;
+    sqlx::query("UPDATE posisi_magang SET deleted_at = now() WHERE id_posisi = $1")
+        .bind(posisi_hilang)
+        .execute(&ctx.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE perusahaan_mitra SET deleted_at = now()
+         WHERE id_perusahaan = (SELECT id_perusahaan FROM posisi_magang WHERE id_posisi = $1)",
+    )
+    .bind(perusahaan_hilang)
+    .execute(&ctx.db)
+    .await
+    .unwrap();
+
+    assert_eq!(seed(&ctx).await.status(), StatusCode::CREATED);
+
+    let di_posisi: Vec<(i32, i64)> =
+        sqlx::query_as("SELECT id_posisi, count(*) FROM pendaftaran GROUP BY id_posisi")
+            .fetch_all(&ctx.db)
+            .await
+            .unwrap();
+    assert_eq!(di_posisi, [(terbuka, 50)]);
+}
+
+#[sqlx::test]
+async fn seeding_with_only_hidden_positions_adds_nothing(db: PgPool) {
+    let ctx = setup(db);
+    let id_posisi = ctx.posisi(5).await;
+    sqlx::query("UPDATE posisi_magang SET deleted_at = now() WHERE id_posisi = $1")
+        .bind(id_posisi)
+        .execute(&ctx.db)
+        .await
+        .unwrap();
+
+    assert_eq!(seed(&ctx).await.status(), StatusCode::CONFLICT);
+    assert_eq!(ctx.count("pendaftaran").await, 0);
+}

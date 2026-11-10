@@ -92,12 +92,16 @@ pub async fn hapus_semua(db: &PgPool) -> Result<Terhapus, sqlx::Error> {
 /// Every pendaftaran has a CV and a Surat Pernyataan DPA, and some also have up to three extra
 /// files. The quota is information only, so a position may get more pendaftaran than its quota.
 pub async fn seed(conn: &mut PgConnection) -> Result<Option<Vec<BerkasSeed>>, sqlx::Error> {
-    // The time columns have no time zone and are written in WIB.
+    // The positions open to register, as in POST /pendaftaran: not hidden, of a company that is not
+    // hidden. The time columns have no time zone and are written in WIB.
     let id_posisi: Vec<i32> = sqlx::query_scalar(
         "SELECT pm.id_posisi
          FROM posisi_magang pm
          JOIN periode_pendaftaran pp ON pp.id_periode = pm.id_periode
-         WHERE now() AT TIME ZONE 'Asia/Jakarta' BETWEEN pp.waktu_mulai AND pp.waktu_tutup",
+         JOIN perusahaan_mitra pr ON pr.id_perusahaan = pm.id_perusahaan
+         WHERE now() AT TIME ZONE 'Asia/Jakarta' BETWEEN pp.waktu_mulai AND pp.waktu_tutup
+           AND pm.deleted_at IS NULL
+           AND pr.deleted_at IS NULL",
     )
     .fetch_all(&mut *conn)
     .await?;

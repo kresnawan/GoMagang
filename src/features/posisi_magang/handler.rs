@@ -1,11 +1,11 @@
 use axum::{
     Json,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 
 use super::{
-    model::{CreatePosisi, PosisiMagang, PosisiQuery},
+    model::{CreatePosisi, PosisiMagang, PosisiQuery, UbahPosisi},
     repository,
 };
 use crate::{
@@ -22,6 +22,12 @@ pub async fn list(
     let peran = find_peran(&state.db, user.id_pengguna)
         .await?
         .ok_or(AppError::Forbidden)?;
+
+    // Only Tim MB may see the hidden positions, as mahasiswa cannot register for them.
+    let termasuk_dihapus = query.termasuk_dihapus.unwrap_or(false);
+    if termasuk_dihapus && !matches!(peran, Peran::TimMb) {
+        return Err(AppError::Forbidden);
+    }
 
     let id_periode = match peran {
         Peran::Mahasiswa => {
@@ -42,7 +48,9 @@ pub async fn list(
         return Ok(Json(Vec::new()));
     };
 
-    Ok(Json(repository::list(&state.db, id_periode, &query).await?))
+    Ok(Json(
+        repository::list(&state.db, id_periode, &query, termasuk_dihapus).await?,
+    ))
 }
 
 pub async fn create(
@@ -51,20 +59,47 @@ pub async fn create(
 ) -> Result<(StatusCode, Json<PosisiMagang>), AppError> {
     let data = data.validate()?;
 
-    let posisi = repository::create(&state.db, &data).await.map_err(|err| {
-        let constraint = err
-            .as_database_error()
-            .and_then(|db_err| db_err.constraint());
-        match constraint {
-            Some("posisi_magang_id_perusahaan_fkey") => {
-                AppError::Validation("Perusahaan tidak ditemukan.")
+    let posisi = repository::create(&state.db, &data)
+        .await
+        .map_err(|err| {
+            let constraint = err
+                .as_database_error()
+                .and_then(|db_err| db_err.constraint());
+            match constraint {
+                Some("posisi_magang_id_periode_fkey") => {
+                    AppError::Validation("Periode tidak ditemukan.")
+                }
+                _ => err.into(),
             }
-            Some("posisi_magang_id_periode_fkey") => {
-                AppError::Validation("Periode tidak ditemukan.")
-            }
-            _ => err.into(),
-        }
-    })?;
+        })?
+        // Hidden companies take no new positions, so they count as missing here.
+        .ok_or(AppError::Validation("Perusahaan tidak ditemukan."))?;
 
     Ok((StatusCode::CREATED, Json(posisi)))
+}
+
+pub async fn ubah(
+    State(state): State<AppState>,
+    Path(id_posisi): Path<i32>,
+    Json(data): Json<UbahPosisi>,
+) -> Result<Json<PosisiMagang>, AppError> {
+    let data = data.validate()?;
+
+    let posisi = repository::ubah(&state.db, id_posisi, &data)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    Ok(Json(posisi))
+}
+
+/// Hides the position. Its row stays, so the pendaftaran on it keep their history.
+pub async fn sembunyikan(
+    State(state): State<AppState>,
+    Path(id_posisi): Path<i32>,
+) -> Result<Json<PosisiMagang>, AppError> {
+    let posisi = repository::sembunyikan(&state.db, id_posisi)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    Ok(Json(posisi))
 }

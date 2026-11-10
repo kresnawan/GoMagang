@@ -2,7 +2,7 @@
 
 Daftar endpoint yang tersedia di backend saat ini. File ini diperbarui setiap kali ada endpoint yang ditambah atau diubah, dan riwayatnya ada di [bagian paling bawah](#riwayat-perubahan).
 
-**Terakhir diperbarui:** 9 November 2026
+**Terakhir diperbarui:** 10 November 2026
 
 ## Ringkasan
 
@@ -28,12 +28,22 @@ Kolom **Frontend** menunjukkan apakah `gomagang-web` sudah memanggil endpoint it
 | `POST` | [`/api/v1/mahasiswa/seed`](#post-apiv1mahasiswaseed-sementara) | Menambahkan 50 mahasiswa acak, masing-masing dengan 1 pendaftaran dan berkas PDF contoh, untuk uji coba (sementara) | `ADMIN_SECRET` | ✅ Jadi | Tidak dipakai, lewat `curl` |
 | `GET` | [`/api/v1/posisi`](#get-apiv1posisi) | Daftar posisi magang | Mahasiswa, Tim MB | ✅ Jadi | Tersambung: halaman Pendaftaran dan Katalog |
 | `POST` | [`/api/v1/posisi`](#post-apiv1posisi) | Membuat posisi magang | Tim MB | ✅ Jadi | Tersambung: halaman Katalog |
+| `PATCH` | [`/api/v1/posisi/{id}`](#patch-apiv1posisiid) | Mengubah nama, kuota, dan deskripsi posisi magang | Tim MB | ✅ Jadi | Tersambung: halaman Katalog |
+| `DELETE` | [`/api/v1/posisi/{id}`](#delete-apiv1posisiid) | Menyembunyikan posisi magang (soft delete) | Tim MB | ✅ Jadi | Tersambung: halaman Katalog |
 | `GET` | [`/api/v1/periode`](#get-apiv1periode) | Daftar periode pendaftaran | Mahasiswa, Tim MB | ✅ Jadi | Tersambung: halaman Periode, Katalog, dan Pendaftar |
 | `POST` | [`/api/v1/periode`](#post-apiv1periode) | Membuat periode pendaftaran | Tim MB | ✅ Jadi | Tersambung |
 | `PATCH` | [`/api/v1/periode/{id}/start`](#patch-apiv1periodeidstart) | Memulai periode saat itu juga | Tim MB | ✅ Jadi | Tersambung: halaman Periode |
 | `PATCH` | [`/api/v1/periode/{id}/stop`](#patch-apiv1periodeidstop) | Menghentikan periode saat itu juga | Tim MB | ✅ Jadi | Tersambung: halaman Periode |
 | `GET` | [`/api/v1/perusahaan`](#get-apiv1perusahaan) | Daftar perusahaan mitra | Mahasiswa, Tim MB | ✅ Jadi | Tersambung |
 | `POST` | [`/api/v1/perusahaan`](#post-apiv1perusahaan) | Membuat perusahaan mitra | Tim MB | ✅ Jadi | Tersambung |
+| `PATCH` | [`/api/v1/perusahaan/{id}`](#patch-apiv1perusahaanid) | Mengubah nama perusahaan mitra | Tim MB | ✅ Jadi | Tersambung: halaman Perusahaan |
+| `DELETE` | [`/api/v1/perusahaan/{id}`](#delete-apiv1perusahaanid) | Menyembunyikan perusahaan mitra (soft delete) | Tim MB | ✅ Jadi | Tersambung: halaman Perusahaan |
+| `GET` | [`/api/v1/mata-kuliah`](#get-apiv1mata-kuliah) | Daftar mata kuliah konversi | Mahasiswa, Tim MB | ✅ Jadi | Tersambung: halaman Konversi MK (mahasiswa dan Tim MB) |
+| `POST` | [`/api/v1/mata-kuliah`](#post-apiv1mata-kuliah) | Menambah mata kuliah konversi beserta SKS-nya | Tim MB | ✅ Jadi | Tersambung: halaman Konversi MK Tim MB |
+| `DELETE` | [`/api/v1/mata-kuliah/{id}`](#delete-apiv1mata-kuliahid) | Menghapus mata kuliah konversi (soft delete) | Tim MB | ✅ Jadi | Tersambung: halaman Konversi MK Tim MB |
+| `GET` | [`/api/v1/pendaftaran/{id}/penyetaraan-mk`](#get-apiv1pendaftaranidpenyetaraan-mk) | Mata kuliah yang dipilih untuk satu pendaftaran | Mahasiswa (miliknya), Tim MB (semua) | ✅ Jadi | Tersambung: halaman Konversi MK mahasiswa |
+| `POST` | [`/api/v1/pendaftaran/{id}/penyetaraan-mk`](#post-apiv1pendaftaranidpenyetaraan-mk) | Memilih mata kuliah untuk pendaftaran berstatus Aktif | Mahasiswa pemilik pendaftaran | ✅ Jadi | Tersambung: halaman Konversi MK mahasiswa |
+| `DELETE` | [`/api/v1/penyetaraan-mk/{id}`](#delete-apiv1penyetaraan-mkid) | Membatalkan pilihan mata kuliah | Mahasiswa pemilik pendaftaran | ✅ Jadi | Tersambung: halaman Konversi MK mahasiswa |
 | `POST` | [`/api/v1/tim-mb`](#post-apiv1tim-mb-sementara) | Mendaftarkan anggota Tim MB baru (sementara) | `ADMIN_SECRET` | ✅ Jadi | Tidak dipakai, lewat `curl` |
 | `POST` | [`/api/v1/pendaftaran`](#post-apiv1pendaftaran) | Mendaftar ke posisi magang, beserta unggah berkas | Mahasiswa | ✅ Jadi | Tersambung: form pendaftaran |
 | `PATCH` | [`/api/v1/pendaftaran?id={id}`](#patch-apiv1pendaftaran) | Mengubah status pendaftaran | Tim MB | ✅ Jadi | Tersambung: dialog Pendaftar |
@@ -53,29 +63,26 @@ Kolom **Frontend** menunjukkan apakah `gomagang-web` sudah memanggil endpoint it
 
 ## Progress
 
-**32 dari 33 endpoint sudah jadi**, dan 1 sisanya masih placeholder.
+**42 dari 43 endpoint sudah jadi**, dan 1 sisanya masih placeholder.
 
 | Area | Backend | Frontend |
 |---|---|---|
 | Login Google, access token, refresh token, logout | ✅ Jadi | Tersambung |
 | Data diri mahasiswa | ✅ Baca dan ubah | Tersambung |
-| Posisi magang | ✅ Baca dan tambah | Tersambung |
+| Posisi magang | ✅ Baca, tambah, ubah, dan sembunyikan | Tersambung |
 | Periode | ✅ Baca, tambah, mulai, dan hentikan | Tersambung |
-| Perusahaan mitra | ✅ Baca dan tambah | Tersambung |
+| Perusahaan mitra | ✅ Baca, tambah, ubah nama, dan sembunyikan | Tersambung |
 | Pendaftaran Tim MB (`POST /api/v1/tim-mb`) | ✅ Sementara, lewat `curl` | Tidak dipakai |
 | Data uji coba (`DELETE /api/v1/mahasiswa` dan `POST /api/v1/mahasiswa/seed`) | ✅ Sementara, lewat `curl` | Tidak dipakai |
 | Pendaftaran mahasiswa | ✅ Kirim, daftar, detail, unduh berkas, dan konfirmasi penerimaan | Tersambung |
 | Pengelolaan pendaftar oleh Tim MB | ✅ Baca, cari, saring, ubah status, jadwal seleksi, plotting DPM, dan ekspor Excel | Tersambung |
 | Surat keterangan magang | 🟡 Dibuat dari template, ditandatangani, dan bisa diverifikasi, tapi sebagian isinya masih mockup | Tersambung: unduh di detail pendaftaran dan halaman verifikasi publik |
-| Konversi mata kuliah | ⬜ Belum ada | Masih mock |
+| Konversi mata kuliah | ✅ Katalog: baca, tambah, dan hapus (soft delete). Penyetaraan: baca, pilih, dan batalkan | Tersambung |
 | Templat SP DPA | ⬜ Masih placeholder | Belum dipakai |
 
 ### Yang masih perlu dibuat di backend
 
 Daftar ini diturunkan dari fitur frontend yang masih mock atau tombolnya masih nonaktif. Rancangan endpoint-nya belum ditentukan.
-
-**Mahasiswa:**
-- Konversi mata kuliah: daftar mata kuliah, serta melihat, menambah, dan menghapus penyetaraan
 
 **Tim MB:**
 - Daftar status beserta `id_status`, karena filter `status` di `GET /api/v1/pendaftaran` memakai id sedangkan frontend hanya mengenal nama status. Frontend kini menurunkannya dari urutan seed migration
@@ -104,7 +111,7 @@ Backend memakai dua cookie httpOnly, jadi JavaScript tidak bisa membacanya dan t
 | `access_token` | 15 menit | `/` | JWT berisi `id_pengguna` dan `email` |
 | `refresh_token` | 7 hari sejak login, tidak diperpanjang saat refresh | `/auth` | String acak, hanya hash-nya yang disimpan di tabel `token_refresh` |
 
-Semua request dari frontend harus mengirim cookie, misalnya `withCredentials: true` di axios. Origin frontend juga harus terdaftar di `CORS_ALLOWED_ORIGINS`, dan CORS hanya mengizinkan method `GET`, `POST`, `PATCH`, dan `PUT`, dan membuka header `Content-Disposition` supaya frontend bisa membaca nama file unduhan.
+Semua request dari frontend harus mengirim cookie, misalnya `withCredentials: true` di axios. Origin frontend juga harus terdaftar di `CORS_ALLOWED_ORIGINS`, dan CORS hanya mengizinkan method `GET`, `POST`, `PATCH`, `PUT`, dan `DELETE`, dan membuka header `Content-Disposition` supaya frontend bisa membaca nama file unduhan.
 
 ### Siapa yang boleh login
 
@@ -363,7 +370,7 @@ Semua berkas adalah file PDF satu halaman A4 yang bisa dibuka dan [diunduh](#get
 
 Nama file dibuat dengan format yang sama seperti unggahan asli, yaitu `{id_pengguna}_{surat-dpa|cv|berkas-tambahan}_{acak}.pdf`, dan `ukuran_berkas` sesuai ukuran file-nya, sekitar 1-2 KB.
 
-**Posisi:** pendaftaran dibagi rata ke semua posisi di periode yang sedang berlangsung, menurut jam WIB, dengan urutan acak. Setiap posisi mendapat jumlah yang sama atau selisih satu, misalnya 50 pendaftaran untuk 6 posisi menjadi 8 atau 9 per posisi. Posisi di periode yang sudah selesai atau belum dimulai tidak mendapat pendaftaran.
+**Posisi:** pendaftaran dibagi rata ke semua posisi yang bisa didaftar di periode yang sedang berlangsung, yaitu yang tidak disembunyikan dan perusahaannya juga tidak disembunyikan, menurut jam WIB, dengan urutan acak. Setiap posisi mendapat jumlah yang sama atau selisih satu, misalnya 50 pendaftaran untuk 6 posisi menjadi 8 atau 9 per posisi. Posisi di periode yang sudah selesai atau belum dimulai tidak mendapat pendaftaran.
 
 **Kuota:** hanya informasi, jadi jumlah pendaftar di satu posisi boleh melebihi kuotanya. Aturan lain di [`POST /api/v1/pendaftaran`](#post-apiv1pendaftaran) juga tidak diperiksa, karena datanya dibuat langsung.
 
@@ -402,6 +409,7 @@ Mengambil daftar posisi magang dalam satu periode, diurutkan berdasarkan nama po
 | `p` | bilangan bulat | Hanya posisi dari `id_perusahaan` ini |
 | `s` | string | Mencari di nama posisi, tanpa membedakan huruf besar dan kecil |
 | `id_periode` | bilangan bulat | Periode yang ditampilkan, dengan aturan di bawah |
+| `termasuk_dihapus` | `true` atau `false` | `true` untuk ikut menampilkan posisi yang disembunyikan, di bawah yang lain. Hanya untuk Tim MB, mahasiswa ditolak `403` |
 
 **Aturan periode:** waktu periode dibandingkan dengan jam WIB. Kalau ada beberapa periode yang berjalan bersamaan, yang dipakai sebagai default adalah yang mulai paling akhir.
 
@@ -411,6 +419,10 @@ Mengambil daftar posisi magang dalam satu periode, diurutkan berdasarkan nama po
 | Tanpa `id_periode`, tidak ada periode berjalan | Daftar kosong `[]` | Periode yang mulai paling akhir |
 | `id_periode` milik periode berjalan | Periode itu | Periode itu |
 | `id_periode` lain | `403` | Periode itu, atau `[]` kalau tidak ditemukan |
+
+Posisi yang disembunyikan lewat [`DELETE /api/v1/posisi/{id}`](#delete-apiv1posisiid) tidak ikut ditampilkan, kecuali Tim MB memakai `termasuk_dihapus=true`. Posisi dari perusahaan yang sudah disembunyikan lewat [`DELETE /api/v1/perusahaan/{id}`](#delete-apiv1perusahaanid) tidak pernah ditampilkan, termasuk dengan `termasuk_dihapus=true`.
+
+Setiap item punya `deleted_at`, berisi waktu posisi disembunyikan dalam WIB, atau `null` kalau masih aktif.
 
 `kuota` adalah jumlah mahasiswa yang akan diterima di posisi itu. Nilainya hanya informasi: tidak membatasi jumlah pendaftar dan tidak berubah saat ada yang mendaftar.
 
@@ -426,7 +438,8 @@ Mengambil daftar posisi magang dalam satu periode, diurutkan berdasarkan nama po
     "perusahaan": {
       "id_perusahaan": 1,
       "nama_perusahaan": "PT Nusantara Digital"
-    }
+    },
+    "deleted_at": null
   }
 ]
 ```
@@ -435,7 +448,7 @@ Mengambil daftar posisi magang dalam satu periode, diurutkan berdasarkan nama po
 |---|---|
 | `400` | Nilai query tidak valid, misalnya `p=abc`. Body-nya teks biasa dari framework |
 | `401` | Access token tidak valid |
-| `403` | Mahasiswa meminta periode yang tidak berjalan, atau user bukan mahasiswa maupun Tim MB |
+| `403` | Mahasiswa meminta periode yang tidak berjalan, atau user bukan mahasiswa maupun Tim MB, atau mahasiswa mengirim `termasuk_dihapus=true` |
 
 ### `POST /api/v1/posisi`
 
@@ -445,7 +458,7 @@ Membuat posisi magang baru. Hanya untuk Tim MB, dilindungi middleware `require_t
 
 | Field | Wajib | Aturan |
 |---|---|---|
-| `id_perusahaan` | Ya | Harus ada di tabel `perusahaan_mitra` |
+| `id_perusahaan` | Ya | Harus ada di tabel `perusahaan_mitra` dan belum disembunyikan |
 | `id_periode` | Ya | Harus ada di tabel `periode_pendaftaran`, boleh periode apa saja |
 | `posisi` | Ya | 1-255 karakter, spasi di awal dan akhir dibuang |
 | `deskripsi_persyaratan` | Ya | Tidak boleh kosong, spasi di awal dan akhir dibuang |
@@ -469,6 +482,74 @@ Membuat posisi magang baru. Hanya untuk Tim MB, dilindungi middleware `require_t
 | `401` | Access token tidak valid |
 | `403` | User bukan Tim MB |
 | `422` | Isi body ditolak, termasuk `id_perusahaan` atau `id_periode` yang tidak ditemukan |
+
+### `PATCH /api/v1/posisi/{id}`
+
+Mengubah nama, kuota, dan deskripsi persyaratan posisi magang yang masih aktif. Hanya untuk Tim MB, dilindungi middleware `require_tim_mb`.
+
+Perusahaan dan periode posisi **tidak bisa diubah**, karena pendaftaran di posisi itu ikut perusahaan dan periodenya. Kalau salah pilih, sembunyikan posisi lalu buat yang baru.
+
+**Header:** `Content-Type: application/json`
+
+Semua field wajib dikirim, karena ketiganya diganti sekaligus.
+
+| Field | Wajib | Aturan |
+|---|---|---|
+| `posisi` | Ya | Aturan yang sama seperti [`POST /api/v1/posisi`](#post-apiv1posisi): 1-255 karakter, spasi di awal dan akhir dibuang |
+| `deskripsi_persyaratan` | Ya | Tidak boleh kosong, spasi di awal dan akhir dibuang |
+| `kuota` | Ya | Bilangan bulat, minimal 1. Hanya informasi, tidak membatasi pendaftar |
+
+**Contoh:**
+```bash
+curl -X PATCH http://localhost:3000/api/v1/posisi/1 \
+  -b "access_token=$ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"posisi":"Frontend Developer Intern","deskripsi_persyaratan":"Menguasai React.","kuota":8}'
+```
+
+Perubahan langsung tampil di katalog, dan nama posisi yang baru ikut tampil di pendaftaran yang sudah ada.
+
+**Respons `200`:** posisi yang sudah diubah, dengan bentuk yang sama seperti satu item di [`GET /api/v1/posisi`](#get-apiv1posisi).
+
+| Status | Arti |
+|---|---|
+| `400` | `id` bukan angka, atau body bukan JSON yang valid. Body-nya teks biasa dari framework |
+| `401` | Access token tidak valid |
+| `403` | User bukan Tim MB |
+| `404` | Posisi tidak ditemukan, sudah disembunyikan, atau perusahaannya sudah disembunyikan |
+| `415` | Header `Content-Type: application/json` tidak dikirim |
+| `422` | Isi body ditolak, termasuk field yang tidak dikirim, serta `id_perusahaan` atau `id_periode` yang ikut dikirim. Pesan aturan seperti `Kuota minimal 1.` dikirim dalam format `{ "message": "..." }`, sedangkan field yang hilang atau tidak dikenal body-nya teks biasa dari framework |
+
+### `DELETE /api/v1/posisi/{id}`
+
+Menyembunyikan posisi magang (soft delete). Hanya untuk Tim MB, dilindungi middleware `require_tim_mb`. Tanpa body.
+
+**Contoh:**
+```bash
+curl -X DELETE http://localhost:3000/api/v1/posisi/1 \
+  -b "access_token=$ACCESS_TOKEN"
+```
+
+**Yang dilakukan:** baris `posisi_magang` tidak dihapus, hanya `deleted_at` diisi dengan waktu saat ini (WIB). Belum ada endpoint untuk mengaktifkannya kembali.
+
+**Akibatnya:**
+
+| Data | Setelah disembunyikan |
+|---|---|
+| [`GET /api/v1/posisi`](#get-apiv1posisi) | Tidak tampil, kecuali Tim MB memakai `termasuk_dihapus=true` |
+| Pendaftaran baru | Ditolak `422` `Posisi tidak ditemukan.` oleh [`POST /api/v1/pendaftaran`](#post-apiv1pendaftaran) |
+| Pendaftaran yang sudah masuk | Tetap ada, tetap tampil dengan nama posisinya, dan tetap bisa diproses Tim MB |
+| [`POST /api/v1/mahasiswa/seed`](#post-apiv1mahasiswaseed-sementara) | Tidak memakai posisi ini |
+| Ubah posisi | Ditolak `404` |
+
+**Respons `200`:** posisi yang disembunyikan, dengan `deleted_at` terisi, dengan bentuk yang sama seperti satu item di [`GET /api/v1/posisi`](#get-apiv1posisi).
+
+| Status | Arti |
+|---|---|
+| `400` | `id` bukan angka. Body-nya teks biasa dari framework |
+| `401` | Access token tidak valid |
+| `403` | User bukan Tim MB |
+| `404` | Posisi tidak ditemukan, sudah disembunyikan, atau perusahaannya sudah disembunyikan |
 
 ## Endpoint periode
 
@@ -605,22 +686,37 @@ curl -X PATCH http://localhost:3000/api/v1/periode/2/stop \
 
 ### `GET /api/v1/perusahaan`
 
-Mengambil semua perusahaan mitra, diurutkan berdasarkan nama. Bisa dipakai mahasiswa dan Tim MB, misalnya untuk mengisi filter `p` di [`GET /api/v1/posisi`](#get-apiv1posisi).
+Mengambil perusahaan mitra yang tidak disembunyikan, diurutkan berdasarkan nama. Bisa dipakai mahasiswa dan Tim MB, misalnya untuk mengisi filter `p` di [`GET /api/v1/posisi`](#get-apiv1posisi).
+
+**Query:**
+
+| Parameter | Wajib | Aturan |
+|---|---|---|
+| `termasuk_dihapus` | Tidak | `true` untuk ikut menampilkan perusahaan yang disembunyikan, di bawah yang lain. Hanya untuk Tim MB |
 
 **Respons `200`:**
 ```json
 [
   {
     "id_perusahaan": 1,
-    "nama_perusahaan": "PT Nusantara Digital"
+    "nama_perusahaan": "PT Nusantara Digital",
+    "deleted_at": null
+  },
+  {
+    "id_perusahaan": 2,
+    "nama_perusahaan": "PT Lama",
+    "deleted_at": "2026-11-10T09:30:00+07:00"
   }
 ]
 ```
 
+`deleted_at` berisi waktu perusahaan disembunyikan lewat [`DELETE /api/v1/perusahaan/{id}`](#delete-apiv1perusahaanid), atau `null` kalau masih aktif. Tanpa `termasuk_dihapus=true`, semua item bernilai `null`.
+
 | Status | Arti |
 |---|---|
+| `400` | Nilai `termasuk_dihapus` bukan `true` atau `false`, atau ada query lain. Body-nya teks biasa dari framework |
 | `401` | Access token tidak valid |
-| `403` | User bukan mahasiswa maupun Tim MB |
+| `403` | User bukan mahasiswa maupun Tim MB, atau mahasiswa mengirim `termasuk_dihapus=true` |
 
 ### `POST /api/v1/perusahaan`
 
@@ -630,7 +726,7 @@ Membuat perusahaan mitra baru. Hanya untuk Tim MB, dilindungi middleware `requir
 
 | Field | Wajib | Aturan |
 |---|---|---|
-| `nama_perusahaan` | Ya | 1-255 karakter, spasi di awal dan akhir dibuang. Tidak boleh sama dengan perusahaan lain, tanpa membedakan huruf besar dan kecil |
+| `nama_perusahaan` | Ya | 1-255 karakter, spasi di awal dan akhir dibuang. Tidak boleh sama dengan perusahaan lain yang masih aktif, tanpa membedakan huruf besar dan kecil. Nama perusahaan yang sudah disembunyikan boleh dipakai lagi |
 
 **Contoh body:**
 ```json
@@ -647,6 +743,222 @@ Membuat perusahaan mitra baru. Hanya untuk Tim MB, dilindungi middleware `requir
 | `403` | User bukan Tim MB |
 | `409` | Nama perusahaan sudah ada |
 | `422` | Isi body ditolak |
+
+### `PATCH /api/v1/perusahaan/{id}`
+
+Mengubah nama perusahaan mitra yang masih aktif. Hanya untuk Tim MB, dilindungi middleware `require_tim_mb`. Nama baru ikut tampil di semua posisi dan pendaftaran perusahaan itu, karena keduanya hanya menyimpan `id_perusahaan`.
+
+**Header:** `Content-Type: application/json`
+
+| Field | Wajib | Aturan |
+|---|---|---|
+| `nama_perusahaan` | Ya | Aturan yang sama seperti [`POST /api/v1/perusahaan`](#post-apiv1perusahaan). Nama sendiri dengan huruf besar-kecil yang berbeda boleh |
+
+**Contoh:**
+```bash
+curl -X PATCH http://localhost:3000/api/v1/perusahaan/1 \
+  -b "access_token=$ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"nama_perusahaan":"PT Nusantara Digital Indonesia"}'
+```
+
+**Respons `200`:** perusahaan dengan nama barunya, dengan bentuk yang sama seperti satu item di [`GET /api/v1/perusahaan`](#get-apiv1perusahaan).
+
+| Status | Arti |
+|---|---|
+| `400` | `id` bukan angka, atau body bukan JSON yang valid. Body-nya teks biasa dari framework |
+| `401` | Access token tidak valid |
+| `403` | User bukan Tim MB |
+| `404` | Perusahaan tidak ditemukan, atau sudah disembunyikan |
+| `409` | Nama perusahaan sudah dipakai perusahaan aktif lain |
+| `415` | Header `Content-Type: application/json` tidak dikirim |
+| `422` | Isi body ditolak |
+
+### `DELETE /api/v1/perusahaan/{id}`
+
+Menyembunyikan perusahaan mitra (soft delete). Hanya untuk Tim MB, dilindungi middleware `require_tim_mb`. Tanpa body.
+
+**Contoh:**
+```bash
+curl -X DELETE http://localhost:3000/api/v1/perusahaan/1 \
+  -b "access_token=$ACCESS_TOKEN"
+```
+
+**Yang dilakukan:** baris `perusahaan_mitra` tidak dihapus, hanya `deleted_at` diisi dengan waktu saat ini (WIB). Belum ada endpoint untuk mengaktifkannya kembali.
+
+**Akibatnya:**
+
+| Data | Setelah disembunyikan |
+|---|---|
+| [`GET /api/v1/perusahaan`](#get-apiv1perusahaan) | Tidak tampil, kecuali Tim MB memakai `termasuk_dihapus=true` |
+| Posisi magang perusahaan itu | Hilang dari [`GET /api/v1/posisi`](#get-apiv1posisi) untuk semua user, dan tidak bisa didaftar lagi: [`POST /api/v1/pendaftaran`](#post-apiv1pendaftaran) menjawab `422` `Posisi tidak ditemukan.` |
+| Posisi baru untuk perusahaan itu | Ditolak `422` oleh [`POST /api/v1/posisi`](#post-apiv1posisi) |
+| Pendaftaran yang sudah masuk | Tetap ada, tetap tampil dengan nama perusahaannya, dan tetap bisa diproses Tim MB |
+| Nama perusahaan | Boleh dipakai perusahaan baru |
+| Ubah nama | Ditolak `404` |
+
+**Respons `200`:** perusahaan yang disembunyikan, dengan `deleted_at` terisi, dengan bentuk yang sama seperti satu item di [`GET /api/v1/perusahaan`](#get-apiv1perusahaan).
+
+| Status | Arti |
+|---|---|
+| `400` | `id` bukan angka. Body-nya teks biasa dari framework |
+| `401` | Access token tidak valid |
+| `403` | User bukan Tim MB |
+| `404` | Perusahaan tidak ditemukan, atau sudah disembunyikan |
+
+## Endpoint konversi mata kuliah
+
+Katalog mata kuliah konversi dikelola Tim MB. Mahasiswa memilih mata kuliah dari katalog itu untuk pendaftarannya yang berstatus `Aktif` (penyetaraan).
+
+### `GET /api/v1/mata-kuliah`
+
+Mengambil mata kuliah yang belum dihapus, diurutkan berdasarkan `mk_konversi`, lalu `mk_asal`. Bisa dipakai mahasiswa dan Tim MB.
+
+**Query:**
+
+| Parameter | Wajib | Aturan |
+|---|---|---|
+| `termasuk_dihapus` | Tidak | `true` untuk ikut menampilkan mata kuliah yang sudah dihapus, di bawah yang lain. Hanya untuk Tim MB |
+
+**Respons `200`:**
+```json
+[
+  {
+    "id_mk_konversi": 1,
+    "mk_asal": "Pengembangan Antarmuka Web",
+    "mk_konversi": "Pemrograman Web Lanjut",
+    "sks": 3,
+    "deleted_at": null
+  }
+]
+```
+
+`deleted_at` berisi waktu mata kuliah dihapus lewat [`DELETE /api/v1/mata-kuliah/{id}`](#delete-apiv1mata-kuliahid), atau `null` kalau masih aktif.
+
+| Status | Arti |
+|---|---|
+| `400` | Nilai `termasuk_dihapus` bukan `true` atau `false`, atau ada query lain. Body-nya teks biasa dari framework |
+| `401` | Access token tidak valid |
+| `403` | User bukan mahasiswa maupun Tim MB, atau mahasiswa mengirim `termasuk_dihapus=true` |
+
+### `POST /api/v1/mata-kuliah`
+
+Menambah mata kuliah konversi. Hanya untuk Tim MB, dilindungi middleware `require_tim_mb`.
+
+**Header:** `Content-Type: application/json`
+
+| Field | Wajib | Aturan |
+|---|---|---|
+| `mk_asal` | Ya | 1-255 karakter, spasi di awal dan akhir dibuang |
+| `mk_konversi` | Ya | 1-255 karakter, spasi di awal dan akhir dibuang |
+| `sks` | Ya | Bilangan bulat 1-24 |
+
+Pasangan `mk_asal` dan `mk_konversi` tidak boleh sama dengan mata kuliah lain yang masih aktif, tanpa membedakan huruf besar dan kecil. Pasangan milik mata kuliah yang sudah dihapus boleh dipakai lagi.
+
+**Contoh body:**
+```json
+{
+  "mk_asal": "Pengembangan Antarmuka Web",
+  "mk_konversi": "Pemrograman Web Lanjut",
+  "sks": 3
+}
+```
+
+**Respons `201`:** mata kuliah yang dibuat, dengan bentuk yang sama seperti satu item di [`GET /api/v1/mata-kuliah`](#get-apiv1mata-kuliah).
+
+| Status | Arti |
+|---|---|
+| `401` | Access token tidak valid |
+| `403` | User bukan Tim MB |
+| `409` | Pasangan MK asal dan MK konversi sudah ada |
+| `422` | Isi body ditolak |
+
+### `DELETE /api/v1/mata-kuliah/{id}`
+
+Menghapus mata kuliah (soft delete). Hanya untuk Tim MB, dilindungi middleware `require_tim_mb`. Tanpa body.
+
+**Yang dilakukan:** baris `mata_kuliah_konversi` tidak dihapus, hanya `deleted_at` diisi dengan waktu saat ini (WIB). Belum ada endpoint untuk mengaktifkannya kembali.
+
+**Akibatnya:**
+
+| Data | Setelah dihapus |
+|---|---|
+| [`GET /api/v1/mata-kuliah`](#get-apiv1mata-kuliah) | Tidak tampil, kecuali Tim MB memakai `termasuk_dihapus=true` |
+| Pilihan baru | Ditolak `422` `Mata kuliah tidak ditemukan.` oleh [`POST /api/v1/pendaftaran/{id}/penyetaraan-mk`](#post-apiv1pendaftaranidpenyetaraan-mk) |
+| Penyetaraan yang sudah ada | Tetap ada dan tetap tampil, dengan `mata_kuliah.deleted_at` terisi. Mahasiswa tetap bisa membatalkannya |
+| Pasangan MK asal dan MK konversi | Boleh dipakai mata kuliah baru |
+
+**Respons `200`:** mata kuliah yang dihapus, dengan `deleted_at` terisi.
+
+| Status | Arti |
+|---|---|
+| `400` | `id` bukan angka. Body-nya teks biasa dari framework |
+| `401` | Access token tidak valid |
+| `403` | User bukan Tim MB |
+| `404` | Mata kuliah tidak ditemukan, atau sudah dihapus |
+
+### `GET /api/v1/pendaftaran/{id}/penyetaraan-mk`
+
+Mengambil mata kuliah yang dipilih untuk satu pendaftaran, urut waktu dipilih. Mahasiswa hanya boleh melihat pendaftaran miliknya, dan Tim MB boleh melihat semua. Mata kuliah yang sudah dihapus dari katalog tetap ikut tampil.
+
+**Respons `200`:**
+```json
+[
+  {
+    "id_penyetaraan": 4,
+    "id_pendaftaran": 12,
+    "created_at": "2026-11-10T10:15:00+07:00",
+    "mata_kuliah": {
+      "id_mk_konversi": 1,
+      "mk_asal": "Pengembangan Antarmuka Web",
+      "mk_konversi": "Pemrograman Web Lanjut",
+      "sks": 3,
+      "deleted_at": null
+    }
+  }
+]
+```
+
+| Status | Arti |
+|---|---|
+| `400` | `id` bukan angka. Body-nya teks biasa dari framework |
+| `401` | Access token tidak valid |
+| `403` | User bukan mahasiswa maupun Tim MB, atau pendaftaran milik mahasiswa lain |
+| `404` | Pendaftaran tidak ditemukan |
+
+### `POST /api/v1/pendaftaran/{id}/penyetaraan-mk`
+
+Memilih satu mata kuliah untuk pendaftaran. Hanya untuk mahasiswa pemilik pendaftaran, dilindungi middleware `require_mahasiswa`, dan pendaftarannya harus berstatus `Aktif`. Satu mata kuliah hanya bisa dipilih sekali per pendaftaran (constraint `UNIQUE (id_pendaftaran, id_mk_konversi)`).
+
+**Header:** `Content-Type: application/json`
+
+| Field | Wajib | Aturan |
+|---|---|---|
+| `id_mk_konversi` | Ya | Mata kuliah yang belum dihapus |
+
+**Respons `201`:** penyetaraan yang dibuat, dengan bentuk yang sama seperti satu item di [`GET /api/v1/pendaftaran/{id}/penyetaraan-mk`](#get-apiv1pendaftaranidpenyetaraan-mk).
+
+| Status | Arti |
+|---|---|
+| `401` | Access token tidak valid |
+| `403` | User bukan mahasiswa, atau pendaftaran milik mahasiswa lain |
+| `404` | Pendaftaran tidak ditemukan |
+| `409` | Pendaftaran tidak berstatus `Aktif`, atau mata kuliah sudah dipilih |
+| `422` | Isi body ditolak, atau mata kuliah tidak ditemukan atau sudah dihapus |
+
+### `DELETE /api/v1/penyetaraan-mk/{id}`
+
+Membatalkan satu pilihan mata kuliah. Barisnya dihapus permanen. Hanya untuk mahasiswa pemilik pendaftaran, dilindungi middleware `require_mahasiswa`, dan pendaftarannya harus berstatus `Aktif`.
+
+**Respons `204`:** tanpa body.
+
+| Status | Arti |
+|---|---|
+| `400` | `id` bukan angka. Body-nya teks biasa dari framework |
+| `401` | Access token tidak valid |
+| `403` | User bukan mahasiswa, atau pendaftaran milik mahasiswa lain |
+| `404` | Penyetaraan tidak ditemukan |
+| `409` | Pendaftaran tidak berstatus `Aktif` |
 
 ## Endpoint pendaftaran
 
@@ -1437,6 +1749,14 @@ Route berikut hanya mengembalikan teks `TODO` dengan status `200`, belum memakai
 
 ## Riwayat perubahan
 
+### 10 November 2026
+
+- Seluruh migration digabung menjadi satu file `migrations/20261104000000_create_schema.sql` yang berisi skema akhir dan seed `status_pendaftaran`, tanpa komentar. Database lama yang sudah menjalankan migration sebelumnya perlu dibuat ulang.
+- Konversi mata kuliah ditambahkan. `GET`, `POST /api/v1/mata-kuliah` dan `DELETE /api/v1/mata-kuliah/{id}` untuk katalog (tambah dan hapus hanya Tim MB, hapus berupa soft delete). `GET`, `POST /api/v1/pendaftaran/{id}/penyetaraan-mk` dan `DELETE /api/v1/penyetaraan-mk/{id}` untuk mahasiswa memilih mata kuliah pada pendaftaran `Aktif`. Skema menambah kolom `deleted_at` di `mata_kuliah_konversi`, serta constraint unik `(id_pendaftaran, id_mk_konversi)` di `penyetaraan_mk`.
+- `PATCH /api/v1/posisi/{id}` dan `DELETE /api/v1/posisi/{id}` ditambahkan, untuk Tim MB mengubah nama, kuota, dan deskripsi posisi magang, serta menyembunyikannya (soft delete). `GET /api/v1/posisi` kini mengirim `deleted_at` dan menerima `termasuk_dihapus`. Posisi yang disembunyikan tidak bisa didaftar.
+- Perbaikan: `POST /api/v1/mahasiswa/seed` tidak lagi memakai posisi dari perusahaan yang sudah disembunyikan.
+- `PATCH /api/v1/perusahaan/{id}` dan `DELETE /api/v1/perusahaan/{id}` ditambahkan, untuk Tim MB mengubah nama dan menyembunyikan perusahaan mitra (soft delete). `GET /api/v1/perusahaan` kini mengirim `deleted_at` dan menerima `termasuk_dihapus`. Posisi dari perusahaan yang disembunyikan hilang dari katalog dan tidak bisa didaftar. CORS kini mengizinkan method `DELETE`.
+
 ### 9 November 2026
 
 - `POST /api/v1/mahasiswa/seed` kini menambahkan 50 mahasiswa, bukan 200. Setiap pendaftaran punya file PDF contoh sungguhan untuk Surat Pernyataan DPA dan CV, dan sebagian juga punya 1 sampai 3 berkas tambahan. Respons kini juga berisi `jumlah_berkas`.
@@ -1448,10 +1768,10 @@ Route berikut hanya mengembalikan teks `TODO` dengan status `200`, belum memakai
 
 ### 6 November 2026
 
-- Kuota posisi kini kuota penerimaan dan hanya sebagai informasi. Kolom `kuota_total` diganti nama menjadi `kuota` dan `sisa_kuota` dihapus, lewat migration `20261106000001_kuota_posisi_sebagai_informasi.sql`. Di API, field `kuota_total` menjadi `kuota`, dan `sisa_kuota` dihapus dari respons `GET` dan `POST /api/v1/posisi`.
+- Kuota posisi kini kuota penerimaan dan hanya sebagai informasi. Kolom `kuota_total` diganti nama menjadi `kuota` dan `sisa_kuota` dihapus. Di API, field `kuota_total` menjadi `kuota`, dan `sisa_kuota` dihapus dari respons `GET` dan `POST /api/v1/posisi`.
 - `POST /api/v1/pendaftaran` tidak lagi menolak pendaftaran karena kuota penuh. Query `is_full` di `GET /api/v1/posisi` dihapus, dan `DELETE /api/v1/mahasiswa` tidak lagi mengubah kuota.
 - Surat keterangan magang kini dibuat backend dari template, ditandatangani dengan Ed25519, dan diverifikasi lewat QR atau berkas PDF: `GET /api/v1/pendaftaran/{id}/surat-keterangan`, `GET` dan `POST /api/v1/surat-keterangan/verifikasi`, serta `GET /api/v1/surat-keterangan/kunci-publik`. Env baru: `SURAT_SIGNING_KEY`.
-- Tabel `surat_keterangan` mendapat kolom `nomor_surat`, `isi`, `tanda_tangan`, dan `hash_berkas`, lewat migration `20261106000000_surat_keterangan_bertanda_tangan.sql`.
+- Tabel `surat_keterangan` mendapat kolom `nomor_surat`, `isi`, `tanda_tangan`, dan `hash_berkas`.
 - `GET /api/v1/pendaftaran/{id}` kini mengirim `nomor_surat` di `surat_keterangan`.
 - `DELETE /api/v1/mahasiswa` kini ikut menghapus file surat keterangan, dan menghitungnya di `jumlah_berkas`.
 - CORS kini membuka header `Content-Disposition`.

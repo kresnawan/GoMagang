@@ -1,5 +1,6 @@
 pub mod auth;
 mod data_uji_coba;
+mod konversi_mk;
 mod mahasiswa;
 pub mod pendaftaran;
 mod periode;
@@ -21,6 +22,7 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         .merge(surat_keterangan::routes())
         .merge(periode::routes(state))
         .merge(perusahaan::routes(state))
+        .merge(konversi_mk::routes(state))
         .merge(templat_sp_dpa::routes())
         .merge(tim_mb::routes(state))
         .merge(data_uji_coba::routes(state))

@@ -10,6 +10,7 @@ pub struct PosisiQuery {
     pub p: Option<i32>,
     pub s: Option<String>,
     pub id_periode: Option<i32>,
+    pub termasuk_dihapus: Option<bool>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -28,6 +29,8 @@ pub struct PosisiMagang {
     pub id_periode: i32,
     #[sqlx(flatten)]
     pub perusahaan: PerusahaanMitra,
+    /// Set once the position has been hidden, in WIB.
+    pub deleted_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -42,20 +45,49 @@ pub struct CreatePosisi {
 
 impl CreatePosisi {
     pub fn validate(mut self) -> Result<Self, AppError> {
-        self.posisi = self.posisi.trim().to_string();
-        if self.posisi.is_empty() || self.posisi.chars().count() > MAX_POSISI_LEN {
-            return Err(AppError::Validation("Posisi harus berisi 1-255 karakter."));
-        }
-
-        self.deskripsi_persyaratan = self.deskripsi_persyaratan.trim().to_string();
-        if self.deskripsi_persyaratan.is_empty() {
-            return Err(AppError::Validation("Deskripsi persyaratan wajib diisi."));
-        }
-
-        if self.kuota < 1 {
-            return Err(AppError::Validation("Kuota minimal 1."));
-        }
-
+        (self.posisi, self.deskripsi_persyaratan) =
+            validate_isi(&self.posisi, &self.deskripsi_persyaratan, self.kuota)?;
         Ok(self)
     }
+}
+
+/// What can be changed on a position. Its company and period stay as they are, as the pendaftaran
+/// on it belong to them.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UbahPosisi {
+    pub posisi: String,
+    pub deskripsi_persyaratan: String,
+    pub kuota: i32,
+}
+
+impl UbahPosisi {
+    pub fn validate(mut self) -> Result<Self, AppError> {
+        (self.posisi, self.deskripsi_persyaratan) =
+            validate_isi(&self.posisi, &self.deskripsi_persyaratan, self.kuota)?;
+        Ok(self)
+    }
+}
+
+/// The rules shared by creating and changing a position. Returns the trimmed texts.
+fn validate_isi(
+    posisi: &str,
+    deskripsi_persyaratan: &str,
+    kuota: i32,
+) -> Result<(String, String), AppError> {
+    let posisi = posisi.trim();
+    if posisi.is_empty() || posisi.chars().count() > MAX_POSISI_LEN {
+        return Err(AppError::Validation("Posisi harus berisi 1-255 karakter."));
+    }
+
+    let deskripsi_persyaratan = deskripsi_persyaratan.trim();
+    if deskripsi_persyaratan.is_empty() {
+        return Err(AppError::Validation("Deskripsi persyaratan wajib diisi."));
+    }
+
+    if kuota < 1 {
+        return Err(AppError::Validation("Kuota minimal 1."));
+    }
+
+    Ok((posisi.to_string(), deskripsi_persyaratan.to_string()))
 }

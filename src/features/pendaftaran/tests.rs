@@ -3846,3 +3846,58 @@ async fn only_tim_mb_can_export(db: PgPool) {
     let response = post_ekspor(&ctx.app, Some(&cookie), body).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
+
+#[sqlx::test]
+async fn rejects_a_position_of_a_hidden_company(db: PgPool) {
+    let ctx = setup(db);
+    let (_, cookie) = ctx.mahasiswa("m@student.ub.ac.id").await;
+    let id_posisi = ctx.posisi_berjalan(5).await;
+    sqlx::query(
+        "UPDATE perusahaan_mitra SET deleted_at = now()
+         WHERE id_perusahaan = (SELECT id_perusahaan FROM posisi_magang WHERE id_posisi = $1)",
+    )
+    .bind(id_posisi)
+    .execute(&ctx.db)
+    .await
+    .unwrap();
+
+    let response = ctx.daftar(&cookie, id_posisi).await;
+    assert_rejected(
+        response,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "Posisi tidak ditemukan.",
+    )
+    .await;
+
+    ctx.assert_nothing_saved().await;
+}
+
+#[sqlx::test]
+async fn a_hidden_position_takes_no_new_pendaftaran_but_keeps_the_old_ones(db: PgPool) {
+    let ctx = setup(db);
+    let tim_mb = ctx.tim_mb().await;
+    let (_, lama) = ctx.mahasiswa("lama@student.ub.ac.id").await;
+    let (_, baru) = ctx.mahasiswa("baru@student.ub.ac.id").await;
+    let id_posisi = ctx.posisi_berjalan(5).await;
+    let (id, _) = daftar_ok(&ctx, &lama, id_posisi).await;
+
+    sqlx::query("UPDATE posisi_magang SET deleted_at = now() WHERE id_posisi = $1")
+        .bind(id_posisi)
+        .execute(&ctx.db)
+        .await
+        .unwrap();
+
+    let response = ctx.daftar(&baru, id_posisi).await;
+    assert_rejected(
+        response,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "Posisi tidak ditemukan.",
+    )
+    .await;
+
+    // The pendaftaran made before can still be seen and processed.
+    let list = json_body(get(&ctx.app, Some(&tim_mb), URI).await).await;
+    assert_eq!(ids(&list), [id]);
+    let response = ubah_status(&ctx.app, &tim_mb, id, LOLOS).await;
+    assert_eq!(response.status(), StatusCode::OK);
+}

@@ -50,8 +50,8 @@ async fn lock_statuses(
     .await
 }
 
-/// Whether the position exists and its period is running. Its quota is information only, so any
-/// number of mahasiswa may register for it.
+/// Whether the position exists, is not hidden, belongs to a company that is not hidden, and its
+/// period is running. Its quota is information only, so any number of mahasiswa may register for it.
 ///
 /// waktu_mulai and waktu_tutup have no time zone and are written in WIB.
 pub async fn find_posisi(
@@ -63,7 +63,8 @@ pub async fn find_posisi(
                     AS periode_berlangsung
          FROM posisi_magang pm
          JOIN periode_pendaftaran pp ON pp.id_periode = pm.id_periode
-         WHERE pm.id_posisi = $1",
+         JOIN perusahaan_mitra pr ON pr.id_perusahaan = pm.id_perusahaan
+         WHERE pm.id_posisi = $1 AND pm.deleted_at IS NULL AND pr.deleted_at IS NULL",
     )
     .bind(id_posisi)
     .fetch_optional(conn)

@@ -552,4 +552,5 @@ async fn browsers_are_allowed_to_send_patch_and_put(db: PgPool) {
         .unwrap();
     assert!(methods.contains("PATCH"), "{methods}");
     assert!(methods.contains("PUT"), "{methods}");
+    assert!(methods.contains("DELETE"), "{methods}");
 }
