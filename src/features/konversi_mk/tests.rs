@@ -24,6 +24,7 @@ fn setup(db: PgPool) -> (Router, AppState) {
         cookie_secure: false,
         upload_dir: Default::default(),
         surat_signing_key: None,
+        smtp: None,
     };
     let state = AppState::new(&config, db);
     (app::build(&config, state.clone()), state)
@@ -60,9 +61,9 @@ async fn mahasiswa(db: &PgPool, state: &AppState, email: &str) -> (User, String)
     (user, cookie)
 }
 
-async fn tim_mb_cookie(db: &PgPool, state: &AppState) -> String {
-    let user = insert_pengguna(db, "tim@gmail.com").await;
-    sqlx::query("INSERT INTO tim_mb (id_pengguna) VALUES ($1)")
+async fn panitia_magang_cookie(db: &PgPool, state: &AppState) -> String {
+    let user = insert_pengguna(db, "panitia@gmail.com").await;
+    sqlx::query("INSERT INTO panitia_magang (id_pengguna) VALUES ($1)")
         .bind(user.id_pengguna)
         .execute(db)
         .await
@@ -136,7 +137,9 @@ fn mk(asal: &str, konversi: &str, sks: i64) -> Value {
 async fn create_ok(app: &Router, cookie: &str, body: Value) -> i64 {
     let response = send(app, "POST", MK, Some(cookie), Some(body)).await;
     assert_eq!(response.status(), StatusCode::CREATED);
-    json_body(response).await["id_mk_konversi"].as_i64().unwrap()
+    json_body(response).await["id_mk_konversi"]
+        .as_i64()
+        .unwrap()
 }
 
 async fn list_mk(app: &Router, cookie: &str, query: &str) -> Value {
@@ -159,16 +162,16 @@ async fn mk_count(db: &PgPool) -> i64 {
 // ---- Katalog mata kuliah ----
 
 #[sqlx::test]
-async fn tim_mb_creates_a_mata_kuliah_and_everyone_logged_in_can_list_it(db: PgPool) {
+async fn panitia_magang_creates_a_mata_kuliah_and_everyone_logged_in_can_list_it(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let (_, mahasiswa) = mahasiswa(&db, &state, "m@student.ub.ac.id").await;
 
     let response = send(
         &app,
         "POST",
         MK,
-        Some(&tim_mb),
+        Some(&panitia_magang),
         Some(mk("  Pengembangan Web  ", " Pemrograman Web ", 3)),
     )
     .await;
@@ -182,7 +185,7 @@ async fn tim_mb_creates_a_mata_kuliah_and_everyone_logged_in_can_list_it(db: PgP
     assert!(created["deleted_at"].is_null());
     assert_eq!(created.as_object().unwrap().len(), 5);
 
-    for cookie in [&tim_mb, &mahasiswa] {
+    for cookie in [&panitia_magang, &mahasiswa] {
         assert_eq!(list_mk(&app, cookie, "").await, json!([created]));
     }
 }
@@ -190,7 +193,7 @@ async fn tim_mb_creates_a_mata_kuliah_and_everyone_logged_in_can_list_it(db: PgP
 #[sqlx::test]
 async fn lists_mata_kuliah_by_konversi_name(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     assert_eq!(list_mk(&app, &cookie, "").await, json!([]));
 
     for konversi in ["Data Mining", "Basis Data", "Etika Profesi"] {
@@ -210,7 +213,7 @@ async fn lists_mata_kuliah_by_konversi_name(db: PgPool) {
 #[sqlx::test]
 async fn rejects_a_pair_that_already_exists_but_allows_either_name_alone(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     create_ok(&app, &cookie, mk("Web", "Pemrograman Web", 3)).await;
 
     for body in [
@@ -231,7 +234,7 @@ async fn rejects_a_pair_that_already_exists_but_allows_either_name_alone(db: PgP
 #[sqlx::test]
 async fn only_one_of_several_concurrent_requests_with_the_same_pair_wins(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let body = mk("Web", "Pemrograman Web", 3);
 
     let (a, b, c, d) = tokio::join!(
@@ -252,7 +255,7 @@ async fn only_one_of_several_concurrent_requests_with_the_same_pair_wins(db: PgP
 #[sqlx::test]
 async fn rejects_invalid_values_without_saving(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     for body in [
         mk("  ", "Pemrograman Web", 3),
@@ -281,12 +284,12 @@ async fn rejects_invalid_values_without_saving(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_create_or_hide_and_listing_needs_a_role(db: PgPool) {
+async fn only_panitia_magang_can_create_or_hide_and_listing_needs_a_role(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let (_, mahasiswa) = mahasiswa(&db, &state, "m@student.ub.ac.id").await;
     let tanpa_peran = cookie_for(&state, &insert_pengguna(&db, "x@gmail.com").await);
-    let id = create_ok(&app, &tim_mb, mk("Web", "Pemrograman Web", 3)).await;
+    let id = create_ok(&app, &panitia_magang, mk("Web", "Pemrograman Web", 3)).await;
 
     for (cookie, expected) in [
         (None, StatusCode::UNAUTHORIZED),
@@ -299,7 +302,14 @@ async fn only_tim_mb_can_create_or_hide_and_listing_needs_a_role(db: PgPool) {
         assert_eq!(response.status(), expected);
     }
     assert_eq!(mk_count(&db).await, 1);
-    assert_eq!(list_mk(&app, &tim_mb, "").await.as_array().unwrap().len(), 1);
+    assert_eq!(
+        list_mk(&app, &panitia_magang, "")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
 
     let response = send(&app, "GET", MK, None, None).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -319,7 +329,7 @@ async fn only_tim_mb_can_create_or_hide_and_listing_needs_a_role(db: PgPool) {
 #[sqlx::test]
 async fn hiding_takes_it_out_of_the_list_keeps_its_row_and_frees_the_pair(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id = create_ok(&app, &cookie, mk("Web", "Pemrograman Web", 3)).await;
     let lain = create_ok(&app, &cookie, mk("Data", "Basis Data", 2)).await;
 
@@ -352,10 +362,10 @@ async fn hiding_takes_it_out_of_the_list_keeps_its_row_and_frees_the_pair(db: Pg
 #[sqlx::test]
 async fn mahasiswa_chooses_and_drops_mata_kuliah_for_their_aktif_pendaftaran(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let (user, cookie) = mahasiswa(&db, &state, "m@student.ub.ac.id").await;
     let id_pendaftaran = pendaftaran(&db, &user, "Aktif").await;
-    let id_mk = create_ok(&app, &tim_mb, mk("Web", "Pemrograman Web", 3)).await;
+    let id_mk = create_ok(&app, &panitia_magang, mk("Web", "Pemrograman Web", 3)).await;
     let uri = penyetaraan_uri(id_pendaftaran);
 
     let response = send(&app, "GET", &uri, Some(&cookie), None).await;
@@ -373,8 +383,8 @@ async fn mahasiswa_chooses_and_drops_mata_kuliah_for_their_aktif_pendaftaran(db:
     let response = send(&app, "POST", &uri, Some(&cookie), Some(body)).await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
 
-    // Tim MB can see it too.
-    for cookie in [&cookie, &tim_mb] {
+    // Panitia Magang can see it too.
+    for cookie in [&cookie, &panitia_magang] {
         let response = send(&app, "GET", &uri, Some(cookie), None).await;
         assert_eq!(json_body(response).await, json!([created]));
     }
@@ -392,11 +402,11 @@ async fn mahasiswa_chooses_and_drops_mata_kuliah_for_their_aktif_pendaftaran(db:
 #[sqlx::test]
 async fn a_hidden_mata_kuliah_cannot_be_chosen_but_stays_where_it_was_chosen(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let (user, cookie) = mahasiswa(&db, &state, "m@student.ub.ac.id").await;
     let uri = penyetaraan_uri(pendaftaran(&db, &user, "Aktif").await);
-    let dipilih = create_ok(&app, &tim_mb, mk("Web", "Pemrograman Web", 3)).await;
-    let belum = create_ok(&app, &tim_mb, mk("Data", "Basis Data", 2)).await;
+    let dipilih = create_ok(&app, &panitia_magang, mk("Web", "Pemrograman Web", 3)).await;
+    let belum = create_ok(&app, &panitia_magang, mk("Data", "Basis Data", 2)).await;
 
     send(
         &app,
@@ -407,7 +417,14 @@ async fn a_hidden_mata_kuliah_cannot_be_chosen_but_stays_where_it_was_chosen(db:
     )
     .await;
     for id in [dipilih, belum] {
-        send(&app, "DELETE", &format!("{MK}/{id}"), Some(&tim_mb), None).await;
+        send(
+            &app,
+            "DELETE",
+            &format!("{MK}/{id}"),
+            Some(&panitia_magang),
+            None,
+        )
+        .await;
     }
 
     let response = send(
@@ -434,9 +451,9 @@ async fn a_hidden_mata_kuliah_cannot_be_chosen_but_stays_where_it_was_chosen(db:
 #[sqlx::test]
 async fn only_an_aktif_pendaftaran_can_change_its_mata_kuliah(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let (user, cookie) = mahasiswa(&db, &state, "m@student.ub.ac.id").await;
-    let id_mk = create_ok(&app, &tim_mb, mk("Web", "Pemrograman Web", 3)).await;
+    let id_mk = create_ok(&app, &panitia_magang, mk("Web", "Pemrograman Web", 3)).await;
     let id_pendaftaran = pendaftaran(&db, &user, "Diterima").await;
 
     let response = send(
@@ -472,15 +489,22 @@ async fn only_an_aktif_pendaftaran_can_change_its_mata_kuliah(db: PgPool) {
 #[sqlx::test]
 async fn a_mahasiswa_cannot_touch_another_ones_penyetaraan(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let (pemilik, pemilik_cookie) = mahasiswa(&db, &state, "a@student.ub.ac.id").await;
     let (_, lain) = mahasiswa(&db, &state, "b@student.ub.ac.id").await;
-    let id_mk = create_ok(&app, &tim_mb, mk("Web", "Pemrograman Web", 3)).await;
+    let id_mk = create_ok(&app, &panitia_magang, mk("Web", "Pemrograman Web", 3)).await;
     let uri = penyetaraan_uri(pendaftaran(&db, &pemilik, "Aktif").await);
     let body = json!({ "id_mk_konversi": id_mk });
 
     let created = json_body(
-        send(&app, "POST", &uri, Some(&pemilik_cookie), Some(body.clone())).await,
+        send(
+            &app,
+            "POST",
+            &uri,
+            Some(&pemilik_cookie),
+            Some(body.clone()),
+        )
+        .await,
     )
     .await;
     let hapus = format!("/api/v1/penyetaraan-mk/{}", created["id_penyetaraan"]);
@@ -492,13 +516,20 @@ async fn a_mahasiswa_cannot_touch_another_ones_penyetaraan(db: PgPool) {
     let response = send(&app, "DELETE", &hapus, Some(&lain), None).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
-    // Tim MB only reads penyetaraan.
-    let response = send(&app, "POST", &uri, Some(&tim_mb), Some(body)).await;
+    // Panitia Magang only reads penyetaraan.
+    let response = send(&app, "POST", &uri, Some(&panitia_magang), Some(body)).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    let response = send(&app, "DELETE", &hapus, Some(&tim_mb), None).await;
+    let response = send(&app, "DELETE", &hapus, Some(&panitia_magang), None).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 
-    let response = send(&app, "GET", &penyetaraan_uri(99999), Some(&tim_mb), None).await;
+    let response = send(
+        &app,
+        "GET",
+        &penyetaraan_uri(99999),
+        Some(&panitia_magang),
+        None,
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     let response = send(&app, "GET", &uri, None, None).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
@@ -507,9 +538,9 @@ async fn a_mahasiswa_cannot_touch_another_ones_penyetaraan(db: PgPool) {
 #[sqlx::test]
 async fn concurrent_requests_choose_a_mata_kuliah_only_once(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let (user, cookie) = mahasiswa(&db, &state, "m@student.ub.ac.id").await;
-    let id_mk = create_ok(&app, &tim_mb, mk("Web", "Pemrograman Web", 3)).await;
+    let id_mk = create_ok(&app, &panitia_magang, mk("Web", "Pemrograman Web", 3)).await;
     let uri = penyetaraan_uri(pendaftaran(&db, &user, "Aktif").await);
     let body = Some(json!({ "id_mk_konversi": id_mk }));
 

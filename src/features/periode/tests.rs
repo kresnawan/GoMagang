@@ -24,6 +24,7 @@ fn setup(db: PgPool) -> (Router, AppState) {
         cookie_secure: false,
         upload_dir: Default::default(),
         surat_signing_key: None,
+        smtp: None,
     };
     let state = AppState::new(&config, db);
     (app::build(&config, state.clone()), state)
@@ -59,9 +60,9 @@ async fn mahasiswa_cookie(db: &PgPool, state: &AppState) -> String {
     cookie_for(state, &user)
 }
 
-async fn tim_mb_cookie(db: &PgPool, state: &AppState) -> String {
-    let user = insert_pengguna(db, "tim@gmail.com").await;
-    sqlx::query("INSERT INTO tim_mb (id_pengguna) VALUES ($1)")
+async fn panitia_magang_cookie(db: &PgPool, state: &AppState) -> String {
+    let user = insert_pengguna(db, "panitia@gmail.com").await;
+    sqlx::query("INSERT INTO panitia_magang (id_pengguna) VALUES ($1)")
         .bind(user.id_pengguna)
         .execute(db)
         .await
@@ -122,7 +123,7 @@ async fn ids(app: &Router, uri: &str, cookie: &str) -> Vec<i32> {
 #[sqlx::test]
 async fn returns_the_period_with_wib_times_and_its_status(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id: i32 = sqlx::query_scalar(
         "INSERT INTO periode_pendaftaran (catatan, waktu_mulai, waktu_tutup)
          VALUES ('Genap', '2020-01-05 08:30:00', '2020-02-15 23:59:00')
@@ -150,9 +151,9 @@ async fn returns_the_period_with_wib_times_and_its_status(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn tim_mb_sees_every_period_newest_first_and_can_filter(db: PgPool) {
+async fn panitia_magang_sees_every_period_newest_first_and_can_filter(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let p = seed_periods(&db).await;
 
     let cases = [
@@ -220,7 +221,7 @@ async fn mahasiswa_gets_nothing_when_no_period_is_running(db: PgPool) {
 #[sqlx::test]
 async fn rejects_invalid_query_values(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     for query in ["status=aktif", "status=", "id=abc"] {
         let uri = format!("{URI}?{query}");
@@ -276,9 +277,9 @@ fn range(start: &str, end: &str) -> Value {
 }
 
 #[sqlx::test]
-async fn tim_mb_creates_a_period(db: PgPool) {
+async fn panitia_magang_creates_a_period(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     let response = post_periode(
         &app,
@@ -310,7 +311,7 @@ async fn tim_mb_creates_a_period(db: PgPool) {
 #[sqlx::test]
 async fn times_in_other_zones_are_saved_in_wib(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     let response = post_periode(
         &app,
@@ -328,7 +329,7 @@ async fn times_in_other_zones_are_saved_in_wib(db: PgPool) {
 #[sqlx::test]
 async fn catatan_is_optional(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     let bodies = [
         range("2090-01-01T00:00:00+07:00", "2090-01-02T00:00:00+07:00"),
@@ -354,7 +355,7 @@ async fn catatan_is_optional(db: PgPool) {
 #[sqlx::test]
 async fn rejects_invalid_values_without_saving(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let start = "2090-01-01T00:00:00+07:00";
     let end = "2090-01-02T00:00:00+07:00";
 
@@ -400,7 +401,7 @@ async fn rejects_invalid_values_without_saving(db: PgPool) {
 #[sqlx::test]
 async fn rejects_ranges_touching_an_existing_period(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let first = post_periode(
         &app,
         Some(&cookie),
@@ -465,7 +466,7 @@ async fn rejects_ranges_touching_an_existing_period(db: PgPool) {
 #[sqlx::test]
 async fn only_one_of_several_concurrent_overlapping_requests_wins(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let body = range("2090-01-01T00:00:00+07:00", "2090-01-02T00:00:00+07:00");
 
     let (a, b, c, d) = tokio::join!(
@@ -484,7 +485,7 @@ async fn only_one_of_several_concurrent_overlapping_requests_wins(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_create_periods(db: PgPool) {
+async fn only_panitia_magang_can_create_periods(db: PgPool) {
     let (app, state) = setup(db.clone());
     let body = range("2090-01-01T00:00:00+07:00", "2090-01-02T00:00:00+07:00");
 
@@ -550,9 +551,9 @@ async fn assert_start_conflict(app: &Router, db: &PgPool, cookie: &str, id: i32,
 }
 
 #[sqlx::test]
-async fn tim_mb_starts_a_period_right_away(db: PgPool) {
+async fn panitia_magang_starts_a_period_right_away(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id: i32 = sqlx::query_scalar(
         "INSERT INTO periode_pendaftaran (catatan, waktu_mulai, waktu_tutup)
          VALUES ('Genap', now() AT TIME ZONE 'Asia/Jakarta' + interval '20 days', '2099-02-15 23:59:00')
@@ -592,13 +593,13 @@ async fn tim_mb_starts_a_period_right_away(db: PgPool) {
 #[sqlx::test]
 async fn mahasiswa_can_see_a_period_once_it_is_started(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let mahasiswa = mahasiswa_cookie(&db, &state).await;
     let id = insert_periode(&db, "20 days", "30 days").await;
 
     assert_eq!(ids(&app, URI, &mahasiswa).await, Vec::<i32>::new());
 
-    let response = start_periode(&app, Some(&tim_mb), &id.to_string()).await;
+    let response = start_periode(&app, Some(&panitia_magang), &id.to_string()).await;
     assert_eq!(response.status(), StatusCode::OK);
 
     assert_eq!(ids(&app, URI, &mahasiswa).await, [id]);
@@ -607,7 +608,7 @@ async fn mahasiswa_can_see_a_period_once_it_is_started(db: PgPool) {
 #[sqlx::test]
 async fn cannot_start_a_period_that_is_running_or_finished(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let periods = seed_periods(&db).await;
 
     assert_start_conflict(
@@ -631,7 +632,7 @@ async fn cannot_start_a_period_that_is_running_or_finished(db: PgPool) {
 #[sqlx::test]
 async fn starting_twice_is_rejected_the_second_time(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id = insert_periode(&db, "20 days", "30 days").await;
 
     let response = start_periode(&app, Some(&cookie), &id.to_string()).await;
@@ -643,7 +644,7 @@ async fn starting_twice_is_rejected_the_second_time(db: PgPool) {
 #[sqlx::test]
 async fn cannot_start_a_period_when_another_is_running(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     insert_periode(&db, "-1 day", "1 day").await;
     let id = insert_periode(&db, "20 days", "30 days").await;
 
@@ -653,7 +654,7 @@ async fn cannot_start_a_period_when_another_is_running(db: PgPool) {
 #[sqlx::test]
 async fn cannot_start_a_period_past_another_one_waiting_before_it(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     insert_periode(&db, "5 days", "6 days").await;
     let id = insert_periode(&db, "20 days", "30 days").await;
 
@@ -663,7 +664,7 @@ async fn cannot_start_a_period_past_another_one_waiting_before_it(db: PgPool) {
 #[sqlx::test]
 async fn periods_outside_the_new_range_do_not_block_starting(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     insert_periode(&db, "-30 days", "-20 days").await;
     insert_periode(&db, "40 days", "50 days").await;
     let id = insert_periode(&db, "20 days", "30 days").await;
@@ -676,7 +677,7 @@ async fn periods_outside_the_new_range_do_not_block_starting(db: PgPool) {
 #[sqlx::test]
 async fn only_one_of_several_concurrent_starts_wins(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id = insert_periode(&db, "20 days", "30 days").await.to_string();
 
     let (a, b, c, d) = tokio::join!(
@@ -698,7 +699,7 @@ async fn only_one_of_several_concurrent_starts_wins(db: PgPool) {
 #[sqlx::test]
 async fn starting_something_missing_finds_nothing(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     let response = start_periode(&app, Some(&cookie), "999999").await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -708,7 +709,7 @@ async fn starting_something_missing_finds_nothing(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_start_periods(db: PgPool) {
+async fn only_panitia_magang_can_start_periods(db: PgPool) {
     let (app, state) = setup(db.clone());
     let id = insert_periode(&db, "20 days", "30 days").await;
     let before = saved_times(&db, id).await;
@@ -755,9 +756,9 @@ async fn assert_stop_conflict(app: &Router, db: &PgPool, cookie: &str, id: i32, 
 }
 
 #[sqlx::test]
-async fn tim_mb_stops_a_running_period_right_away(db: PgPool) {
+async fn panitia_magang_stops_a_running_period_right_away(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id: i32 = sqlx::query_scalar(
         "INSERT INTO periode_pendaftaran (catatan, waktu_mulai, waktu_tutup)
          VALUES ('Genap', '2020-01-05 08:30:00', now() AT TIME ZONE 'Asia/Jakarta' + interval '20 days')
@@ -797,13 +798,13 @@ async fn tim_mb_stops_a_running_period_right_away(db: PgPool) {
 #[sqlx::test]
 async fn mahasiswa_stops_seeing_a_period_once_it_is_stopped(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let mahasiswa = mahasiswa_cookie(&db, &state).await;
     let id = insert_periode(&db, "-1 day", "1 day").await;
 
     assert_eq!(ids(&app, URI, &mahasiswa).await, [id]);
 
-    let response = stop_periode(&app, Some(&tim_mb), &id.to_string()).await;
+    let response = stop_periode(&app, Some(&panitia_magang), &id.to_string()).await;
     assert_eq!(response.status(), StatusCode::OK);
 
     assert_eq!(ids(&app, URI, &mahasiswa).await, Vec::<i32>::new());
@@ -812,7 +813,7 @@ async fn mahasiswa_stops_seeing_a_period_once_it_is_stopped(db: PgPool) {
 #[sqlx::test]
 async fn cannot_stop_a_period_that_is_not_running(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let periods = seed_periods(&db).await;
 
     assert_stop_conflict(
@@ -836,7 +837,7 @@ async fn cannot_stop_a_period_that_is_not_running(db: PgPool) {
 #[sqlx::test]
 async fn stopping_twice_is_rejected_the_second_time(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id = insert_periode(&db, "-1 day", "1 day").await;
 
     let response = stop_periode(&app, Some(&cookie), &id.to_string()).await;
@@ -848,7 +849,7 @@ async fn stopping_twice_is_rejected_the_second_time(db: PgPool) {
 #[sqlx::test]
 async fn stopping_a_period_clears_the_way_for_starting_the_next(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let running = insert_periode(&db, "-1 day", "1 day").await;
     let next = insert_periode(&db, "20 days", "30 days").await;
 
@@ -864,7 +865,7 @@ async fn stopping_a_period_clears_the_way_for_starting_the_next(db: PgPool) {
 #[sqlx::test]
 async fn a_stopped_period_cannot_be_started_again(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id = insert_periode(&db, "-1 day", "1 day").await;
 
     let response = stop_periode(&app, Some(&cookie), &id.to_string()).await;
@@ -876,7 +877,7 @@ async fn a_stopped_period_cannot_be_started_again(db: PgPool) {
 #[sqlx::test]
 async fn a_started_period_can_be_stopped(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id = insert_periode(&db, "20 days", "30 days").await.to_string();
 
     let response = start_periode(&app, Some(&cookie), &id).await;
@@ -890,7 +891,7 @@ async fn a_started_period_can_be_stopped(db: PgPool) {
 #[sqlx::test]
 async fn only_one_of_several_concurrent_stops_wins(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let id = insert_periode(&db, "-1 day", "1 day").await.to_string();
 
     let (a, b, c, d) = tokio::join!(
@@ -912,7 +913,7 @@ async fn only_one_of_several_concurrent_stops_wins(db: PgPool) {
 #[sqlx::test]
 async fn stopping_something_missing_finds_nothing(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     let response = stop_periode(&app, Some(&cookie), "999999").await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -922,7 +923,7 @@ async fn stopping_something_missing_finds_nothing(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_stop_periods(db: PgPool) {
+async fn only_panitia_magang_can_stop_periods(db: PgPool) {
     let (app, state) = setup(db.clone());
     let id = insert_periode(&db, "-1 day", "1 day").await;
     let before = saved_times(&db, id).await;

@@ -28,7 +28,7 @@ pub struct GoogleClaims {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Peran {
     Mahasiswa,
-    TimMb,
+    PanitiaMagang,
 }
 
 #[derive(Debug, Serialize, FromRow)]

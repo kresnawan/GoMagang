@@ -16,7 +16,7 @@ const DELETE_ANAK_PENDAFTARAN: [&str; 4] = [
     "DELETE FROM plotting_dpm WHERE id_pendaftaran = ANY($1)",
 ];
 
-/// Deletes every mahasiswa and all that belongs to them. Tim MB accounts and the positions, with
+/// Deletes every mahasiswa and all that belongs to them. Panitia Magang accounts and the positions, with
 /// their quota, are not touched.
 pub async fn hapus_semua(db: &PgPool) -> Result<Terhapus, sqlx::Error> {
     let mut tx = db.begin().await?;
@@ -27,7 +27,7 @@ pub async fn hapus_semua(db: &PgPool) -> Result<Terhapus, sqlx::Error> {
             .fetch_all(&mut *tx)
             .await?;
 
-    // Holds back Tim MB's changes, whose log rows would otherwise stop these from going.
+    // Holds back Panitia Magang's changes, whose log rows would otherwise stop these from going.
     let id_pendaftaran: Vec<i32> = sqlx::query_scalar(
         "SELECT id_pendaftaran
          FROM pendaftaran

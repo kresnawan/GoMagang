@@ -6,16 +6,16 @@ use axum::{
 
 use super::handler;
 use crate::{
-    features::{auth::require_tim_mb, mahasiswa::require_mahasiswa},
+    features::{auth::require_panitia_magang, mahasiswa::require_mahasiswa},
     state::AppState,
 };
 
 pub fn routes(state: &AppState) -> Router<AppState> {
-    let create_mk =
-        post(handler::create_mk).route_layer(from_fn_with_state(state.clone(), require_tim_mb));
+    let create_mk = post(handler::create_mk)
+        .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
 
     let hapus_mk = delete(handler::soft_delete_mk)
-        .route_layer(from_fn_with_state(state.clone(), require_tim_mb));
+        .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
 
     let tambah_penyetaraan = post(handler::tambah_penyetaraan)
         .route_layer(from_fn_with_state(state.clone(), require_mahasiswa));

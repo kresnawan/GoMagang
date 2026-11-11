@@ -25,7 +25,8 @@ pub const MAX_BODY_SIZE: usize = (2 + MAX_BERKAS_TAMBAHAN) * MAX_BERKAS_SIZE + 6
 /// Portfolio and other extra files a mahasiswa may add, on top of the two required ones.
 pub const MAX_BERKAS_TAMBAHAN: usize = 5;
 pub const JENIS_BERKAS_TAMBAHAN: &str = "Portfolio dan Berkas Tambahan";
-pub const MAX_PENDAFTARAN_BERJALAN: i64 = 2;
+/// How many times a mahasiswa may register in one period, whatever happened to those registrations.
+pub const MAX_PENDAFTARAN_PER_PERIODE: i64 = 2;
 const DEFAULT_ROWS: i32 = 25;
 
 const STATUS_PENDAFTARAN: [&str; 7] = [
@@ -82,8 +83,8 @@ impl UpdateStatus {
     }
 }
 
-/// The changes Tim MB can make. Diterima to Aktif is left out, as the mahasiswa confirms that one.
-pub fn tim_mb_can_change(lama: &str, baru: &str) -> bool {
+/// The changes Panitia Magang can make. Diterima to Aktif is left out, as the mahasiswa confirms that one.
+pub fn panitia_magang_can_change(lama: &str, baru: &str) -> bool {
     matches!(
         (lama, baru),
         (
@@ -97,7 +98,7 @@ pub fn tim_mb_can_change(lama: &str, baru: &str) -> bool {
 /// What became of a request to change a status.
 #[derive(Debug, PartialEq)]
 pub enum UpdateStatusResult {
-    Updated,
+    Updated { status_lama: String },
     NotFound,
     NotAllowed,
 }
@@ -373,9 +374,11 @@ pub struct PosisiTujuan {
 }
 
 #[derive(Debug, FromRow)]
-pub struct JumlahBerjalan {
-    pub total: i64,
-    pub di_posisi: i64,
+pub struct JumlahPendaftaran {
+    /// Every registration in the target position's period, in any status.
+    pub di_periode: i64,
+    /// Registrations for the target position that have not reached a final status.
+    pub berjalan_di_posisi: i64,
     pub aktif: i64,
 }
 

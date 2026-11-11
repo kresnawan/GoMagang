@@ -24,6 +24,7 @@ fn setup(db: PgPool) -> (Router, AppState) {
         cookie_secure: false,
         upload_dir: Default::default(),
         surat_signing_key: None,
+        smtp: None,
     };
     let state = AppState::new(&config, db);
     (app::build(&config, state.clone()), state)
@@ -59,9 +60,9 @@ async fn mahasiswa_cookie(db: &PgPool, state: &AppState) -> String {
     cookie_for(state, &user)
 }
 
-async fn tim_mb_cookie(db: &PgPool, state: &AppState) -> String {
-    let user = insert_pengguna(db, "tim@gmail.com").await;
-    sqlx::query("INSERT INTO tim_mb (id_pengguna) VALUES ($1)")
+async fn panitia_magang_cookie(db: &PgPool, state: &AppState) -> String {
+    let user = insert_pengguna(db, "panitia@gmail.com").await;
+    sqlx::query("INSERT INTO panitia_magang (id_pengguna) VALUES ($1)")
         .bind(user.id_pengguna)
         .execute(db)
         .await
@@ -107,14 +108,14 @@ async fn perusahaan_count(db: &PgPool) -> i64 {
 }
 
 #[sqlx::test]
-async fn tim_mb_creates_a_company_and_everyone_logged_in_can_list_it(db: PgPool) {
+async fn panitia_magang_creates_a_company_and_everyone_logged_in_can_list_it(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let mahasiswa = mahasiswa_cookie(&db, &state).await;
 
     let response = post(
         &app,
-        Some(&tim_mb),
+        Some(&panitia_magang),
         json!({ "nama_perusahaan": "  PT Satu  " }),
     )
     .await;
@@ -126,7 +127,7 @@ async fn tim_mb_creates_a_company_and_everyone_logged_in_can_list_it(db: PgPool)
     assert!(created["deleted_at"].is_null());
     assert_eq!(created.as_object().unwrap().len(), 3);
 
-    for cookie in [&tim_mb, &mahasiswa] {
+    for cookie in [&panitia_magang, &mahasiswa] {
         let response = get(&app, Some(cookie)).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(json_body(response).await, json!([created]));
@@ -136,7 +137,7 @@ async fn tim_mb_creates_a_company_and_everyone_logged_in_can_list_it(db: PgPool)
 #[sqlx::test]
 async fn lists_companies_by_name_and_empty_when_there_are_none(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     let response = get(&app, Some(&cookie)).await;
     assert_eq!(json_body(response).await, json!([]));
@@ -158,7 +159,7 @@ async fn lists_companies_by_name_and_empty_when_there_are_none(db: PgPool) {
 #[sqlx::test]
 async fn rejects_a_name_that_is_already_taken(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     post(&app, Some(&cookie), json!({ "nama_perusahaan": "PT Satu" })).await;
 
     for nama in ["PT Satu", "pt satu", "PT SATU", "  PT Satu  "] {
@@ -172,7 +173,7 @@ async fn rejects_a_name_that_is_already_taken(db: PgPool) {
 #[sqlx::test]
 async fn only_one_of_several_concurrent_requests_with_the_same_name_wins(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let body = json!({ "nama_perusahaan": "PT Satu" });
 
     let (a, b, c, d) = tokio::join!(
@@ -193,7 +194,7 @@ async fn only_one_of_several_concurrent_requests_with_the_same_name_wins(db: PgP
 #[sqlx::test]
 async fn rejects_invalid_values_without_saving(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     for body in [
         json!({ "nama_perusahaan": "   " }),
@@ -226,7 +227,7 @@ async fn rejects_invalid_values_without_saving(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_create_companies(db: PgPool) {
+async fn only_panitia_magang_can_create_companies(db: PgPool) {
     let (app, state) = setup(db.clone());
     let body = json!({ "nama_perusahaan": "PT Satu" });
 
@@ -316,20 +317,20 @@ async fn create_ok(app: &Router, cookie: &str, nama: &str) -> i64 {
 }
 
 #[sqlx::test]
-async fn tim_mb_renames_a_company(db: PgPool) {
+async fn panitia_magang_renames_a_company(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let mahasiswa = mahasiswa_cookie(&db, &state).await;
-    let id = create_ok(&app, &tim_mb, "PT Lama").await;
+    let id = create_ok(&app, &panitia_magang, "PT Lama").await;
 
-    let response = rename(&app, Some(&tim_mb), id, "  PT Baru  ").await;
+    let response = rename(&app, Some(&panitia_magang), id, "  PT Baru  ").await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         json_body(response).await,
         json!({ "id_perusahaan": id, "nama_perusahaan": "PT Baru", "deleted_at": null })
     );
 
-    for cookie in [&tim_mb, &mahasiswa] {
+    for cookie in [&panitia_magang, &mahasiswa] {
         assert_eq!(names(&list(&app, cookie, "").await), ["PT Baru"]);
     }
     assert_eq!(perusahaan_count(&db).await, 1);
@@ -338,17 +339,19 @@ async fn tim_mb_renames_a_company(db: PgPool) {
 #[sqlx::test]
 async fn renaming_keeps_names_unique_among_companies_that_are_not_hidden(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
-    let satu = create_ok(&app, &tim_mb, "PT Satu").await;
-    let dua = create_ok(&app, &tim_mb, "PT Dua").await;
-    let tersembunyi = create_ok(&app, &tim_mb, "PT Tiga").await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
+    let satu = create_ok(&app, &panitia_magang, "PT Satu").await;
+    let dua = create_ok(&app, &panitia_magang, "PT Dua").await;
+    let tersembunyi = create_ok(&app, &panitia_magang, "PT Tiga").await;
     assert_eq!(
-        hide(&app, Some(&tim_mb), tersembunyi).await.status(),
+        hide(&app, Some(&panitia_magang), tersembunyi)
+            .await
+            .status(),
         StatusCode::OK
     );
 
     for nama in ["PT Dua", "pt dua", " PT DUA "] {
-        let response = rename(&app, Some(&tim_mb), satu, nama).await;
+        let response = rename(&app, Some(&panitia_magang), satu, nama).await;
         assert_eq!(response.status(), StatusCode::CONFLICT, "{nama}");
         assert_eq!(
             json_body(response).await["message"],
@@ -358,21 +361,24 @@ async fn renaming_keeps_names_unique_among_companies_that_are_not_hidden(db: PgP
 
     // Its own name in another case, and the name of a hidden company, are both free.
     for nama in ["PT SATU", "PT Tiga"] {
-        let response = rename(&app, Some(&tim_mb), satu, nama).await;
+        let response = rename(&app, Some(&panitia_magang), satu, nama).await;
         assert_eq!(response.status(), StatusCode::OK, "{nama}");
     }
-    assert_eq!(names(&list(&app, &tim_mb, "").await), ["PT Dua", "PT Tiga"]);
+    assert_eq!(
+        names(&list(&app, &panitia_magang, "").await),
+        ["PT Dua", "PT Tiga"]
+    );
     let _ = dua;
 }
 
 #[sqlx::test]
 async fn renaming_rejects_bad_names_and_unknown_companies(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
-    let id = create_ok(&app, &tim_mb, "PT Satu").await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
+    let id = create_ok(&app, &panitia_magang, "PT Satu").await;
 
     for nama in ["", "   ", &"x".repeat(256)] {
-        let response = rename(&app, Some(&tim_mb), id, nama).await;
+        let response = rename(&app, Some(&panitia_magang), id, nama).await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
     let uri = format!("{URI}/{id}");
@@ -380,7 +386,7 @@ async fn renaming_rejects_bad_names_and_unknown_companies(db: PgPool) {
         &app,
         "PATCH",
         &uri,
-        Some(&tim_mb),
+        Some(&panitia_magang),
         Some(json!({ "nama": "x" })),
     )
     .await;
@@ -389,27 +395,27 @@ async fn renaming_rejects_bad_names_and_unknown_companies(db: PgPool) {
         &app,
         "PATCH",
         &format!("{URI}/abc"),
-        Some(&tim_mb),
+        Some(&panitia_magang),
         Some(json!({ "nama_perusahaan": "x" })),
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    let response = rename(&app, Some(&tim_mb), 999_999, "PT Baru").await;
+    let response = rename(&app, Some(&panitia_magang), 999_999, "PT Baru").await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
-    assert_eq!(names(&list(&app, &tim_mb, "").await), ["PT Satu"]);
+    assert_eq!(names(&list(&app, &panitia_magang, "").await), ["PT Satu"]);
 }
 
 #[sqlx::test]
 async fn hiding_a_company_takes_it_out_of_the_list_but_keeps_its_row(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let mahasiswa = mahasiswa_cookie(&db, &state).await;
-    let tetap = create_ok(&app, &tim_mb, "PT Tetap").await;
-    let hilang = create_ok(&app, &tim_mb, "PT Hilang").await;
+    let tetap = create_ok(&app, &panitia_magang, "PT Tetap").await;
+    let hilang = create_ok(&app, &panitia_magang, "PT Hilang").await;
 
-    let response = hide(&app, Some(&tim_mb), hilang).await;
+    let response = hide(&app, Some(&panitia_magang), hilang).await;
     assert_eq!(response.status(), StatusCode::OK);
     let hidden = json_body(response).await;
     assert_eq!(hidden["id_perusahaan"], hilang);
@@ -429,7 +435,7 @@ async fn hiding_a_company_takes_it_out_of_the_list_but_keeps_its_row(db: PgPool)
     .unwrap();
     assert!(is_wib);
 
-    for cookie in [&tim_mb, &mahasiswa] {
+    for cookie in [&panitia_magang, &mahasiswa] {
         assert_eq!(names(&list(&app, cookie, "").await), ["PT Tetap"]);
     }
     assert_eq!(perusahaan_count(&db).await, 2);
@@ -437,26 +443,29 @@ async fn hiding_a_company_takes_it_out_of_the_list_but_keeps_its_row(db: PgPool)
 }
 
 #[sqlx::test]
-async fn tim_mb_can_list_the_hidden_companies_after_the_others(db: PgPool) {
+async fn panitia_magang_can_list_the_hidden_companies_after_the_others(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let mahasiswa = mahasiswa_cookie(&db, &state).await;
-    let a = create_ok(&app, &tim_mb, "PT Awal").await;
-    create_ok(&app, &tim_mb, "PT Zebra").await;
-    create_ok(&app, &tim_mb, "PT Biasa").await;
-    assert_eq!(hide(&app, Some(&tim_mb), a).await.status(), StatusCode::OK);
+    let a = create_ok(&app, &panitia_magang, "PT Awal").await;
+    create_ok(&app, &panitia_magang, "PT Zebra").await;
+    create_ok(&app, &panitia_magang, "PT Biasa").await;
+    assert_eq!(
+        hide(&app, Some(&panitia_magang), a).await.status(),
+        StatusCode::OK
+    );
 
-    let semua = list(&app, &tim_mb, "?termasuk_dihapus=true").await;
+    let semua = list(&app, &panitia_magang, "?termasuk_dihapus=true").await;
     assert_eq!(names(&semua), ["PT Biasa", "PT Zebra", "PT Awal"]);
     assert!(semua[0]["deleted_at"].is_null());
     assert!(semua[2]["deleted_at"].is_string());
 
     assert_eq!(
-        names(&list(&app, &tim_mb, "?termasuk_dihapus=false").await),
+        names(&list(&app, &panitia_magang, "?termasuk_dihapus=false").await),
         ["PT Biasa", "PT Zebra"]
     );
 
-    // Only asking for the hidden ones is Tim MB's alone.
+    // Only asking for the hidden ones is Panitia Magang's alone.
     let uri = format!("{URI}?termasuk_dihapus=true");
     let response = send(&app, "GET", &uri, Some(&mahasiswa), None).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
@@ -466,7 +475,7 @@ async fn tim_mb_can_list_the_hidden_companies_after_the_others(db: PgPool) {
     );
     for query in ["?termasuk_dihapus=ya", "?dihapus=true"] {
         let uri = format!("{URI}{query}");
-        let response = send(&app, "GET", &uri, Some(&tim_mb), None).await;
+        let response = send(&app, "GET", &uri, Some(&panitia_magang), None).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
     }
 }
@@ -474,39 +483,51 @@ async fn tim_mb_can_list_the_hidden_companies_after_the_others(db: PgPool) {
 #[sqlx::test]
 async fn a_hidden_company_cannot_be_hidden_or_renamed_again_but_its_name_is_free(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
-    let id = create_ok(&app, &tim_mb, "PT Satu").await;
-    assert_eq!(hide(&app, Some(&tim_mb), id).await.status(), StatusCode::OK);
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
+    let id = create_ok(&app, &panitia_magang, "PT Satu").await;
+    assert_eq!(
+        hide(&app, Some(&panitia_magang), id).await.status(),
+        StatusCode::OK
+    );
 
     assert_eq!(
-        hide(&app, Some(&tim_mb), id).await.status(),
+        hide(&app, Some(&panitia_magang), id).await.status(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        hide(&app, Some(&tim_mb), 999_999).await.status(),
+        hide(&app, Some(&panitia_magang), 999_999).await.status(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        rename(&app, Some(&tim_mb), id, "PT Lain").await.status(),
+        rename(&app, Some(&panitia_magang), id, "PT Lain")
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
-    let response = send(&app, "DELETE", &format!("{URI}/abc"), Some(&tim_mb), None).await;
+    let response = send(
+        &app,
+        "DELETE",
+        &format!("{URI}/abc"),
+        Some(&panitia_magang),
+        None,
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
-    let baru = create_ok(&app, &tim_mb, "pt satu").await;
+    let baru = create_ok(&app, &panitia_magang, "pt satu").await;
     assert_ne!(baru, id);
-    let semua = list(&app, &tim_mb, "?termasuk_dihapus=true").await;
+    let semua = list(&app, &panitia_magang, "?termasuk_dihapus=true").await;
     assert_eq!(names(&semua), ["pt satu", "PT Satu"]);
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_rename_or_hide(db: PgPool) {
+async fn only_panitia_magang_can_rename_or_hide(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let mahasiswa = mahasiswa_cookie(&db, &state).await;
     let user = insert_pengguna(&db, "tanpa.peran@gmail.com").await;
     let no_role = cookie_for(&state, &user);
-    let id = create_ok(&app, &tim_mb, "PT Satu").await;
+    let id = create_ok(&app, &panitia_magang, "PT Satu").await;
 
     assert_eq!(
         rename(&app, None, id, "PT Baru").await.status(),
@@ -528,7 +549,7 @@ async fn only_tim_mb_can_rename_or_hide(db: PgPool) {
     }
 
     assert_eq!(
-        names(&list(&app, &tim_mb, "?termasuk_dihapus=true").await),
+        names(&list(&app, &panitia_magang, "?termasuk_dihapus=true").await),
         ["PT Satu"]
     );
 }
@@ -536,12 +557,16 @@ async fn only_tim_mb_can_rename_or_hide(db: PgPool) {
 #[sqlx::test]
 async fn a_rename_and_a_create_cannot_both_take_one_name(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
-    let id = create_ok(&app, &tim_mb, "PT Satu").await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
+    let id = create_ok(&app, &panitia_magang, "PT Satu").await;
 
     let (renamed, created) = tokio::join!(
-        rename(&app, Some(&tim_mb), id, "PT Sama"),
-        post(&app, Some(&tim_mb), json!({ "nama_perusahaan": "PT Sama" })),
+        rename(&app, Some(&panitia_magang), id, "PT Sama"),
+        post(
+            &app,
+            Some(&panitia_magang),
+            json!({ "nama_perusahaan": "PT Sama" })
+        ),
     );
     let mut statuses = [renamed.status(), created.status()];
     statuses.sort();

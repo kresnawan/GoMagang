@@ -23,7 +23,7 @@ const STATE_COOKIE: &str = "oauth_state";
 const STATE_COOKIE_PATH: &str = "/auth/google";
 const STATE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAHASISWA_HOME_PATH: &str = "/dasbor";
-const TIM_MB_HOME_PATH: &str = "/tim-mb";
+const PANITIA_MAGANG_HOME_PATH: &str = "/panitia-magang";
 
 pub async fn google_login(
     State(state): State<AppState>,
@@ -140,11 +140,11 @@ async fn start_session(
             repository::upsert_mahasiswa(&state.db, claims).await?,
             MAHASISWA_HOME_PATH,
         ),
-        AccountKind::TimMb => (
-            repository::find_tim_mb(&state.db, claims)
+        AccountKind::PanitiaMagang => (
+            repository::find_panitia_magang(&state.db, claims)
                 .await?
                 .ok_or(AppError::Forbidden)?,
-            TIM_MB_HOME_PATH,
+            PANITIA_MAGANG_HOME_PATH,
         ),
     };
     let token = generate_token();

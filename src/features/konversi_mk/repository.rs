@@ -110,7 +110,7 @@ pub async fn list_penyetaraan(
     .await
 }
 
-/// Who owns the pendaftaran and whether it is Aktif, holding back changes to it, such as Tim MB
+/// Who owns the pendaftaran and whether it is Aktif, holding back changes to it, such as Panitia Magang
 /// changing its status, until the transaction ends.
 ///
 /// Two statements on purpose, as in the pendaftaran feature: FOR UPDATE on a join with

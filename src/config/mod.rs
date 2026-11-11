@@ -25,6 +25,58 @@ pub struct Config {
     /// Base64 of the 32-byte Ed25519 seed that signs surat keterangan. Without it, surat
     /// keterangan cannot be issued or verified.
     pub surat_signing_key: Option<String>,
+    /// Without it, no email is sent, e.g. the notice to a mahasiswa when their status changes.
+    pub smtp: Option<SmtpConfig>,
+}
+
+/// How the SMTP server is reached.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmtpTls {
+    /// Plain connection upgraded with STARTTLS, usually on port 587.
+    Starttls,
+    /// TLS from the start, usually on port 465.
+    Tls,
+    /// No encryption, only for a local test server such as Mailpit.
+    None,
+}
+
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: Option<u16>,
+    pub tls: SmtpTls,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    /// The sender, e.g. `Panitia Magang <magang@example.com>`.
+    pub from: String,
+}
+
+impl SmtpConfig {
+    fn from_env() -> Option<Self> {
+        let host = env_nonempty("SMTP_HOST")?;
+        let port = env_nonempty("SMTP_PORT").map(|port| {
+            port.parse()
+                .unwrap_or_else(|_| panic!("invalid SMTP_PORT: {port}"))
+        });
+        let tls = match env_nonempty("SMTP_TLS").as_deref() {
+            None | Some("starttls") => SmtpTls::Starttls,
+            Some("tls") => SmtpTls::Tls,
+            Some("none") => SmtpTls::None,
+            Some(other) => panic!("SMTP_TLS must be starttls, tls or none, not {other}"),
+        };
+
+        Some(Self {
+            host,
+            port,
+            tls,
+            username: env_nonempty("SMTP_USERNAME"),
+            password: env_nonempty("SMTP_PASSWORD"),
+            from: env_nonempty("SMTP_FROM").expect("SMTP_FROM must be set when SMTP_HOST is"),
+        })
+    }
+}
+
+fn env_nonempty(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 impl Config {
@@ -70,6 +122,7 @@ impl Config {
             surat_signing_key: std::env::var("SURAT_SIGNING_KEY")
                 .ok()
                 .filter(|key| !key.is_empty()),
+            smtp: SmtpConfig::from_env(),
         }
     }
 }

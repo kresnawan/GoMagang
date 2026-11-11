@@ -1,10 +1,10 @@
 use sqlx::{PgConnection, PgPool};
 
 use super::model::{
-    AcceptResult, Berkas, BerkasBaru, FilterPendaftaran, Halaman, JadwalSeleksi, JumlahBerjalan,
+    AcceptResult, Berkas, BerkasBaru, FilterPendaftaran, Halaman, JadwalSeleksi, JumlahPendaftaran,
     LogStatus, LokasiBerkas, Pendaftaran, PendaftaranRingkas, PlottingDpm, PosisiTujuan,
     SimpanJadwal, SimpanPlotting, SimpanTahapResult, SuratKeterangan, UpdateStatusResult,
-    tim_mb_can_change,
+    panitia_magang_can_change,
 };
 
 /// Holds back this mahasiswa's other requests until the transaction ends, so that two requests
@@ -71,21 +71,28 @@ pub async fn find_posisi(
     .await
 }
 
-/// Counts the pendaftaran that have not reached a final status, in total, for this position, and
-/// those that are Aktif.
-pub async fn count_berjalan(
+/// Counts this mahasiswa's pendaftaran: all of them in the period of the target position, those
+/// still running for that position, and those that are Aktif. Positions hidden since then still
+/// count.
+pub async fn count_pendaftaran(
     conn: &mut PgConnection,
     id_pengguna: i32,
     id_posisi: i32,
-) -> Result<JumlahBerjalan, sqlx::Error> {
+) -> Result<JumlahPendaftaran, sqlx::Error> {
     sqlx::query_as(
-        "SELECT count(*) AS total,
-                count(*) FILTER (WHERE p.id_posisi = $2) AS di_posisi,
+        "SELECT count(*) FILTER (
+                    WHERE pm.id_periode =
+                        (SELECT id_periode FROM posisi_magang WHERE id_posisi = $2)
+                ) AS di_periode,
+                count(*) FILTER (
+                    WHERE p.id_posisi = $2
+                      AND s.status NOT IN ('Selesai', 'Tidak Lolos', 'Batal/Mengundurkan Diri')
+                ) AS berjalan_di_posisi,
                 count(*) FILTER (WHERE s.status = 'Aktif') AS aktif
          FROM pendaftaran p
          JOIN status_pendaftaran s ON s.id_status = p.id_status
-         WHERE p.id_pengguna = $1
-           AND s.status NOT IN ('Selesai', 'Tidak Lolos', 'Batal/Mengundurkan Diri')",
+         JOIN posisi_magang pm ON pm.id_posisi = p.id_posisi
+         WHERE p.id_pengguna = $1",
     )
     .bind(id_pengguna)
     .bind(id_posisi)
@@ -302,7 +309,7 @@ pub async fn update_status(
     let Some((_, status_lama)) = statuses.into_iter().next() else {
         return Ok(UpdateStatusResult::NotFound);
     };
-    if !tim_mb_can_change(&status_lama, status_baru) {
+    if !panitia_magang_can_change(&status_lama, status_baru) {
         return Ok(UpdateStatusResult::NotAllowed);
     }
 
@@ -334,7 +341,7 @@ pub async fn update_status(
 
     tx.commit().await?;
 
-    Ok(UpdateStatusResult::Updated)
+    Ok(UpdateStatusResult::Updated { status_lama })
 }
 
 /// Locks these pendaftaran and says why they cannot take the data of a stage, if so. Every one of
@@ -440,7 +447,7 @@ pub async fn simpan_plotting(
 /// Makes this pendaftaran Aktif and withdraws the mahasiswa from their other running ones, logging
 /// each change. The quota stays as it is, and pendaftaran with a final status are left alone.
 ///
-/// id_pengubah only refers to Tim MB, so it stays empty for what the mahasiswa does themselves, as
+/// id_pengubah only refers to Panitia Magang, so it stays empty for what the mahasiswa does themselves, as
 /// in the first log of a new pendaftaran.
 pub async fn accept(
     db: &PgPool,
@@ -466,7 +473,7 @@ pub async fn accept(
     lock_mahasiswa(&mut tx, id_pengguna).await?;
 
     // The mahasiswa's lock keeps this list from growing, and the statuses from here on are held
-    // back from Tim MB's changes, so the checks and the changes below all see the latest ones.
+    // back from Panitia Magang's changes, so the checks and the changes below all see the latest ones.
     let semua: Vec<i32> =
         sqlx::query_scalar("SELECT id_pendaftaran FROM pendaftaran WHERE id_pengguna = $1")
             .bind(id_pengguna)

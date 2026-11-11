@@ -59,6 +59,7 @@ fn config(uploads: &TempDir, kunci: Option<&str>) -> Config {
         cookie_secure: false,
         upload_dir: uploads.0.clone(),
         surat_signing_key: kunci.map(str::to_string),
+        smtp: None,
     }
 }
 
@@ -114,9 +115,9 @@ impl Ctx {
         (user, cookie)
     }
 
-    async fn tim_mb(&self) -> String {
-        let user = self.pengguna("tim@gmail.com").await;
-        sqlx::query("INSERT INTO tim_mb (id_pengguna) VALUES ($1)")
+    async fn panitia_magang(&self) -> String {
+        let user = self.pengguna("panitia@gmail.com").await;
+        sqlx::query("INSERT INTO panitia_magang (id_pengguna) VALUES ($1)")
             .bind(user.id_pengguna)
             .execute(&self.db)
             .await
@@ -345,11 +346,11 @@ async fn only_an_aktif_pendaftaran_gets_a_new_surat(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_the_owner_and_tim_mb_can_download(db: PgPool) {
+async fn only_the_owner_and_panitia_magang_can_download(db: PgPool) {
     let ctx = setup(db);
     let (pemilik, cookie_pemilik) = ctx.mahasiswa("budi@student.ub.ac.id", "1").await;
     let (_, cookie_lain) = ctx.mahasiswa("ani@student.ub.ac.id", "2").await;
-    let cookie_tim = ctx.tim_mb().await;
+    let cookie_tim = ctx.panitia_magang().await;
     let id = ctx.pendaftaran(&pemilik, "Aktif").await;
 
     assert_eq!(ctx.unduh(None, id).await.status(), StatusCode::UNAUTHORIZED);
@@ -357,7 +358,7 @@ async fn only_the_owner_and_tim_mb_can_download(db: PgPool) {
         ctx.unduh(Some(&cookie_lain), id).await.status(),
         StatusCode::FORBIDDEN
     );
-    // Tim MB may issue it too; the owner then gets the same file.
+    // Panitia Magang may issue it too; the owner then gets the same file.
     let dari_tim = ctx.unduh_ok(&cookie_tim, id).await;
     assert_eq!(ctx.unduh_ok(&cookie_pemilik, id).await, dari_tim);
     assert_eq!(

@@ -35,7 +35,7 @@ fn penanda(state: &AppState) -> Result<Arc<PenandaSurat>, AppError> {
         .ok_or(AppError::ServiceUnavailable)
 }
 
-/// Sends the surat of a pendaftaran to the mahasiswa it belongs to, or to Tim MB. The first
+/// Sends the surat of a pendaftaran to the mahasiswa it belongs to, or to Panitia Magang. The first
 /// download of an Aktif pendaftaran issues it; every later one sends the same file.
 pub async fn unduh(
     State(state): State<AppState>,
@@ -77,7 +77,7 @@ pub async fn unduh(
             format!("attachment; filename=\"surat-keterangan-magang-{nim}.pdf\""),
         ),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
-        // Private to its owner and Tim MB, so no cache may keep a copy.
+        // Private to its owner and Panitia Magang, so no cache may keep a copy.
         (header::CACHE_CONTROL, "private, no-store".to_string()),
     ];
 

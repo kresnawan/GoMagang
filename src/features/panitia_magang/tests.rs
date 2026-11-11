@@ -14,7 +14,7 @@ use crate::{
     state::AppState,
 };
 
-const URI: &str = "/api/v1/tim-mb";
+const URI: &str = "/api/v1/panitia-magang";
 const SECRET: &str = "admin-secret-with-at-least-32-bytes!";
 
 fn config(admin_secret: Option<&str>) -> Config {
@@ -30,6 +30,7 @@ fn config(admin_secret: Option<&str>) -> Config {
         cookie_secure: false,
         upload_dir: Default::default(),
         surat_signing_key: None,
+        smtp: None,
     }
 }
 
@@ -64,13 +65,13 @@ async fn pengguna_count(db: &PgPool) -> i64 {
 }
 
 #[sqlx::test]
-async fn registers_a_tim_mb_that_can_bind_google_at_first_login(db: PgPool) {
+async fn registers_a_panitia_magang_that_can_bind_google_at_first_login(db: PgPool) {
     let app = app_with(db.clone(), Some(SECRET));
 
     let response = post(
         app,
         Some(SECRET),
-        json!({ "email": "  Tim.MB@Gmail.com ", "nama": " Budi ", "no_hp": "081234567890" }),
+        json!({ "email": "  Panitia.Magang@Gmail.com ", "nama": " Budi ", "no_hp": "081234567890" }),
     )
     .await;
 
@@ -81,7 +82,7 @@ async fn registers_a_tim_mb_that_can_bind_google_at_first_login(db: PgPool) {
         body,
         json!({
             "id_pengguna": id,
-            "email": "tim.mb@gmail.com",
+            "email": "panitia.magang@gmail.com",
             "nama": "Budi",
             "no_hp": "081234567890",
         })
@@ -94,14 +95,17 @@ async fn registers_a_tim_mb_that_can_bind_google_at_first_login(db: PgPool) {
             .await
             .unwrap();
     assert_eq!(google_sub, None);
-    assert_eq!(find_peran(&db, id).await.unwrap(), Some(Peran::TimMb));
+    assert_eq!(
+        find_peran(&db, id).await.unwrap(),
+        Some(Peran::PanitiaMagang)
+    );
 }
 
 #[sqlx::test]
 async fn nama_and_no_hp_are_optional(db: PgPool) {
     let app = app_with(db, Some(SECRET));
 
-    let response = post(app, Some(SECRET), json!({ "email": "tim@gmail.com" })).await;
+    let response = post(app, Some(SECRET), json!({ "email": "panitia@gmail.com" })).await;
 
     assert_eq!(response.status(), StatusCode::CREATED);
     let body = json_body(response).await;
@@ -113,7 +117,7 @@ async fn nama_and_no_hp_are_optional(db: PgPool) {
 async fn the_route_does_not_exist_without_a_configured_secret(db: PgPool) {
     let app = app_with(db.clone(), None);
 
-    let response = post(app, Some(SECRET), json!({ "email": "tim@gmail.com" })).await;
+    let response = post(app, Some(SECRET), json!({ "email": "panitia@gmail.com" })).await;
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(pengguna_count(&db).await, 0);
@@ -124,9 +128,9 @@ async fn rejects_a_missing_or_wrong_secret_before_reading_the_body(db: PgPool) {
     let app = app_with(db.clone(), Some(SECRET));
 
     let cases = [
-        (None, json!({ "email": "tim@gmail.com" })),
-        (Some("wrong"), json!({ "email": "tim@gmail.com" })),
-        (Some(""), json!({ "email": "tim@gmail.com" })),
+        (None, json!({ "email": "panitia@gmail.com" })),
+        (Some("wrong"), json!({ "email": "panitia@gmail.com" })),
+        (Some(""), json!({ "email": "panitia@gmail.com" })),
         (None, json!({ "invalid": "body" })),
     ];
 
@@ -149,9 +153,9 @@ async fn rejects_invalid_values_without_creating_anything(db: PgPool) {
         json!({ "email": "tim" }),
         json!({ "email": "a b@gmail.com" }),
         json!({ "email": "a@b@gmail.com" }),
-        json!({ "email": "tim@gmail.com", "nama": "   " }),
-        json!({ "email": "tim@gmail.com", "no_hp": "0812" }),
-        json!({ "email": "tim@gmail.com", "no_hp": "0812-3456-7890" }),
+        json!({ "email": "panitia@gmail.com", "nama": "   " }),
+        json!({ "email": "panitia@gmail.com", "no_hp": "0812" }),
+        json!({ "email": "panitia@gmail.com", "no_hp": "0812-3456-7890" }),
     ];
 
     for body in cases {
@@ -167,7 +171,7 @@ async fn rejects_invalid_values_without_creating_anything(db: PgPool) {
     for body in [
         json!({}),
         json!({ "email": null }),
-        json!({ "email": "tim@gmail.com", "id_pengguna": 1 }),
+        json!({ "email": "panitia@gmail.com", "id_pengguna": 1 }),
     ] {
         let response = post(app.clone(), Some(SECRET), body.clone()).await;
         assert_eq!(
@@ -191,12 +195,12 @@ async fn rejects_an_email_that_is_already_taken(db: PgPool) {
     let first = post(
         app.clone(),
         Some(SECRET),
-        json!({ "email": "tim@gmail.com" }),
+        json!({ "email": "panitia@gmail.com" }),
     )
     .await;
     assert_eq!(first.status(), StatusCode::CREATED);
 
-    for email in ["tim@gmail.com", "TIM@gmail.com", "lama@gmail.com"] {
+    for email in ["panitia@gmail.com", "PANITIA@gmail.com", "lama@gmail.com"] {
         let response = post(app.clone(), Some(SECRET), json!({ "email": email })).await;
         assert_eq!(response.status(), StatusCode::CONFLICT, "{email}");
         assert!(json_body(response).await["message"].is_string(), "{email}");

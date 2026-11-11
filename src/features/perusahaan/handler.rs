@@ -16,7 +16,7 @@ use crate::{
 
 const NAMA_DIPAKAI: AppError = AppError::Conflict("Perusahaan dengan nama ini sudah ada.");
 
-/// The companies that are not hidden. Tim MB may ask for the hidden ones too.
+/// The companies that are not hidden. Panitia Magang may ask for the hidden ones too.
 pub async fn list(
     State(state): State<AppState>,
     user: User,
@@ -27,7 +27,7 @@ pub async fn list(
         .ok_or(AppError::Forbidden)?;
 
     let termasuk_dihapus = query.termasuk_dihapus.unwrap_or(false);
-    if termasuk_dihapus && !matches!(peran, Peran::TimMb) {
+    if termasuk_dihapus && !matches!(peran, Peran::PanitiaMagang) {
         return Err(AppError::Forbidden);
     }
 

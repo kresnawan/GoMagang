@@ -13,11 +13,11 @@ use super::{
     ekspor::{self, Ekspor},
     model::{
         AcceptResult, DaftarPendaftaran, FilterPendaftaran, FormPendaftaran, ListQuery,
-        LokasiBerkas, MAX_PENDAFTARAN_BERJALAN, MahasiswaDetail, Pendaftaran, PendaftaranDetail,
+        LokasiBerkas, MAX_PENDAFTARAN_PER_PERIODE, MahasiswaDetail, Pendaftaran, PendaftaranDetail,
         PendaftaranRingkas, SimpanJadwal, SimpanPlotting, SimpanTahapResult, StatusQuery,
         UpdateStatus, UpdateStatusResult,
     },
-    repository, storage,
+    notifikasi, repository, storage,
     tautan::MASA_BERLAKU,
 };
 use crate::{
@@ -31,7 +31,7 @@ use crate::{
 
 const SUDAH_AKTIF: &str = "Kamu sudah memiliki pendaftaran yang aktif.";
 
-/// Everything for Tim MB, and only their own for a mahasiswa.
+/// Everything for Panitia Magang, and only their own for a mahasiswa.
 pub async fn list(
     State(state): State<AppState>,
     user: User,
@@ -45,7 +45,7 @@ pub async fn list(
 
     let id_pengguna = match peran {
         Peran::Mahasiswa => Some(user.id_pengguna),
-        Peran::TimMb => None,
+        Peran::PanitiaMagang => None,
     };
 
     let filter = query.filter(id_pengguna);
@@ -97,15 +97,24 @@ pub async fn update_status(
 ) -> Result<Json<PendaftaranDetail>, AppError> {
     let data = data.validate()?;
 
-    match repository::update_status(&state.db, query.id, user.id_pengguna, &data.status).await? {
-        UpdateStatusResult::Updated => {}
-        UpdateStatusResult::NotFound => return Err(AppError::NotFound),
-        UpdateStatusResult::NotAllowed => {
-            return Err(AppError::Conflict("Perubahan status ini tidak diizinkan."));
-        }
-    }
+    let status_lama =
+        match repository::update_status(&state.db, query.id, user.id_pengguna, &data.status).await?
+        {
+            UpdateStatusResult::Updated { status_lama } => status_lama,
+            UpdateStatusResult::NotFound => return Err(AppError::NotFound),
+            UpdateStatusResult::NotAllowed => {
+                return Err(AppError::Conflict("Perubahan status ini tidak diizinkan."));
+            }
+        };
 
-    Ok(Json(load_changed_detail(&state, query.id).await?))
+    let detail = load_changed_detail(&state, query.id).await?;
+    state.email.kirim(notifikasi::perubahan_status(
+        &detail,
+        &status_lama,
+        &state.frontend_url,
+    ));
+
+    Ok(Json(detail))
 }
 
 /// The mahasiswa takes up a place they were accepted for, and withdraws from their other running
@@ -160,7 +169,7 @@ pub async fn simpan_plotting(
     }
 }
 
-/// Sends the pendaftaran picked by Tim MB as a file, in the order of the list, with a public link
+/// Sends the pendaftaran picked by Panitia Magang as a file, in the order of the list, with a public link
 /// to each of their files.
 pub async fn ekspor(
     State(state): State<AppState>,
@@ -282,18 +291,19 @@ pub async fn create(
         ));
     }
 
-    let berjalan = repository::count_berjalan(&mut tx, user.id_pengguna, form.id_posisi).await?;
-    if berjalan.aktif > 0 {
+    let jumlah = repository::count_pendaftaran(&mut tx, user.id_pengguna, form.id_posisi).await?;
+    if jumlah.aktif > 0 {
         return Err(AppError::Conflict(SUDAH_AKTIF));
     }
-    if berjalan.di_posisi > 0 {
+    if jumlah.berjalan_di_posisi > 0 {
         return Err(AppError::Conflict(
             "Kamu masih punya pendaftaran yang berjalan di posisi ini.",
         ));
     }
-    if berjalan.total >= MAX_PENDAFTARAN_BERJALAN {
+    // Cancelled, rejected, and finished registrations count too.
+    if jumlah.di_periode >= MAX_PENDAFTARAN_PER_PERIODE {
         return Err(AppError::Conflict(
-            "Kamu sudah memiliki 2 pendaftaran yang sedang berjalan.",
+            "Kamu sudah mendaftar 2 kali di periode ini.",
         ));
     }
 
@@ -317,7 +327,7 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(pendaftaran)))
 }
 
-/// Sends a file to the mahasiswa who uploaded it, or to Tim MB.
+/// Sends a file to the mahasiswa who uploaded it, or to Panitia Magang.
 pub async fn download_berkas(
     State(state): State<AppState>,
     user: User,
@@ -344,7 +354,7 @@ pub async fn download_berkas(
             format!("attachment; filename=\"{}\"", berkas.nama_berkas),
         ),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
-        // The file is private to its owner and Tim MB, so no cache may keep a copy.
+        // The file is private to its owner and Panitia Magang, so no cache may keep a copy.
         (header::CACHE_CONTROL, "private, no-store".to_string()),
     ];
 

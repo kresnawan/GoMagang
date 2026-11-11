@@ -9,21 +9,21 @@ const NO_HP_DIGITS: std::ops::RangeInclusive<usize> = 9..=15;
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct RegisterTimMb {
+pub struct RegisterPanitiaMagang {
     pub email: String,
     pub nama: Option<String>,
     pub no_hp: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct TimMb {
+pub struct PanitiaMagang {
     pub id_pengguna: i32,
     pub email: String,
     pub nama: Option<String>,
     pub no_hp: Option<String>,
 }
 
-impl RegisterTimMb {
+impl RegisterPanitiaMagang {
     pub fn validate(mut self) -> Result<Self, AppError> {
         self.email = self.email.trim().to_ascii_lowercase();
         let local = self.email.strip_suffix(GMAIL_SUFFIX).unwrap_or_default();
@@ -33,7 +33,7 @@ impl RegisterTimMb {
             || local.contains(char::is_whitespace)
         {
             return Err(AppError::Validation(
-                "Email harus berupa alamat @gmail.com, karena Tim MB login dengan Gmail.",
+                "Email harus berupa alamat @gmail.com, karena Panitia Magang login dengan Gmail.",
             ));
         }
         if let Some(nama) = &self.nama {

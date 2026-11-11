@@ -23,9 +23,9 @@ pub async fn list(
         .await?
         .ok_or(AppError::Forbidden)?;
 
-    // Only Tim MB may see the hidden positions, as mahasiswa cannot register for them.
+    // Only Panitia Magang may see the hidden positions, as mahasiswa cannot register for them.
     let termasuk_dihapus = query.termasuk_dihapus.unwrap_or(false);
-    if termasuk_dihapus && !matches!(peran, Peran::TimMb) {
+    if termasuk_dihapus && !matches!(peran, Peran::PanitiaMagang) {
         return Err(AppError::Forbidden);
     }
 
@@ -38,7 +38,7 @@ pub async fn list(
                 None => running.first().copied(),
             }
         }
-        Peran::TimMb => match query.id_periode {
+        Peran::PanitiaMagang => match query.id_periode {
             Some(id) => Some(id),
             None => repository::default_periode_id(&state.db).await?,
         },

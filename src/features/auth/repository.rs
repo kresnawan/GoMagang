@@ -47,15 +47,18 @@ pub async fn upsert_mahasiswa(db: &PgPool, claims: &GoogleClaims) -> Result<User
     Ok(user)
 }
 
-/// Finds the Tim MB member with this email, and ties the row to the Google account on first login.
+/// Finds the Panitia Magang member with this email, and ties the row to the Google account on first login.
 ///
-/// Returns `None` if the email isn't registered in tim_mb, or if another Google account already
+/// Returns `None` if the email isn't registered in panitia_magang, or if another Google account already
 /// claimed the row.
-pub async fn find_tim_mb(db: &PgPool, claims: &GoogleClaims) -> Result<Option<User>, sqlx::Error> {
+pub async fn find_panitia_magang(
+    db: &PgPool,
+    claims: &GoogleClaims,
+) -> Result<Option<User>, sqlx::Error> {
     sqlx::query_as(
         "UPDATE pengguna p
          SET google_sub = $1
-         FROM tim_mb t
+         FROM panitia_magang t
          WHERE t.id_pengguna = p.id_pengguna
            AND lower(p.email) = lower($2)
            AND (p.google_sub IS NULL OR p.google_sub = $1)
@@ -67,18 +70,18 @@ pub async fn find_tim_mb(db: &PgPool, claims: &GoogleClaims) -> Result<Option<Us
     .await
 }
 
-/// Who this pengguna is, going by the table their row is in. Tim MB wins if they are in both.
+/// Who this pengguna is, going by the table their row is in. Panitia Magang wins if they are in both.
 pub async fn find_peran(db: &PgPool, id_pengguna: i32) -> Result<Option<Peran>, sqlx::Error> {
-    let (tim_mb, mahasiswa): (bool, bool) = sqlx::query_as(
-        "SELECT EXISTS (SELECT 1 FROM tim_mb WHERE id_pengguna = $1),
+    let (panitia_magang, mahasiswa): (bool, bool) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM panitia_magang WHERE id_pengguna = $1),
                 EXISTS (SELECT 1 FROM mahasiswa WHERE id_pengguna = $1)",
     )
     .bind(id_pengguna)
     .fetch_one(db)
     .await?;
 
-    Ok(match (tim_mb, mahasiswa) {
-        (true, _) => Some(Peran::TimMb),
+    Ok(match (panitia_magang, mahasiswa) {
+        (true, _) => Some(Peran::PanitiaMagang),
         (false, true) => Some(Peran::Mahasiswa),
         (false, false) => None,
     })

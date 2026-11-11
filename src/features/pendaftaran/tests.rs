@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 use axum::{
     Router,
@@ -9,7 +12,13 @@ use serde_json::Value;
 use sqlx::{AssertSqlSafe, PgPool};
 use tower::ServiceExt;
 
-use crate::{app, config::Config, features::auth::User, state::AppState};
+use crate::{
+    app,
+    config::Config,
+    email::{Email, PengirimEmail},
+    features::auth::User,
+    state::AppState,
+};
 
 const URI: &str = "/api/v1/pendaftaran";
 const BOUNDARY: &str = "batas-pengujian";
@@ -46,6 +55,7 @@ struct Ctx {
     state: AppState,
     db: PgPool,
     uploads: TempDir,
+    email: Arc<Mutex<Vec<Email>>>,
 }
 
 fn app_with_upload_dir(db: PgPool, upload_dir: &Path) -> (Router, AppState) {
@@ -61,19 +71,26 @@ fn app_with_upload_dir(db: PgPool, upload_dir: &Path) -> (Router, AppState) {
         cookie_secure: false,
         upload_dir: upload_dir.to_path_buf(),
         surat_signing_key: None,
+        smtp: None,
     };
-    let state = AppState::new(&config, db);
+    let mut state = AppState::new(&config, db);
+    state.email = Arc::new(PengirimEmail::Uji(Arc::default()));
     (app::build(&config, state.clone()), state)
 }
 
 fn setup(db: PgPool) -> Ctx {
     let uploads = TempDir::new();
     let (app, state) = app_with_upload_dir(db.clone(), &uploads.0);
+    let PengirimEmail::Uji(email) = &*state.email else {
+        unreachable!()
+    };
+    let email = email.clone();
     Ctx {
         app,
         state,
         db,
         uploads,
+        email,
     }
 }
 
@@ -114,9 +131,9 @@ impl Ctx {
         (user, cookie)
     }
 
-    async fn tim_mb(&self) -> String {
-        let user = insert_pengguna(&self.db, "tim@gmail.com").await;
-        sqlx::query("INSERT INTO tim_mb (id_pengguna) VALUES ($1)")
+    async fn panitia_magang(&self) -> String {
+        let user = insert_pengguna(&self.db, "panitia@gmail.com").await;
+        sqlx::query("INSERT INTO panitia_magang (id_pengguna) VALUES ($1)")
             .bind(user.id_pengguna)
             .execute(&self.db)
             .await
@@ -161,6 +178,21 @@ impl Ctx {
 
     async fn posisi_berjalan(&self, kuota: i32) -> i32 {
         self.posisi(kuota, "-1 day", "1 day").await
+    }
+
+    /// Another position in the same period as `id_posisi`.
+    async fn posisi_seperiode(&self, id_posisi: i32) -> i32 {
+        sqlx::query_scalar(
+            "INSERT INTO posisi_magang
+                 (id_perusahaan, posisi, deskripsi_persyaratan, kuota, id_periode)
+             SELECT id_perusahaan, 'Frontend', 'React', kuota, id_periode
+             FROM posisi_magang WHERE id_posisi = $1
+             RETURNING id_posisi",
+        )
+        .bind(id_posisi)
+        .fetch_one(&self.db)
+        .await
+        .unwrap()
     }
 
     async fn kuota(&self, id_posisi: i32) -> i32 {
@@ -494,7 +526,7 @@ async fn saves_each_extra_file_after_the_required_ones(db: PgPool) {
         assert_eq!(std::fs::read(ctx.uploads.0.join(nama)).unwrap(), isi);
     }
 
-    // The detail lists them too, so Tim MB can download each one.
+    // The detail lists them too, so Panitia Magang can download each one.
     let id_pendaftaran = created["id_pendaftaran"].as_i64().unwrap();
     let detail =
         json_body(get(&ctx.app, Some(&cookie), &format!("{URI}/{id_pendaftaran}")).await).await;
@@ -717,38 +749,47 @@ async fn rejects_a_second_running_registration_for_the_same_position(db: PgPool)
 }
 
 #[sqlx::test]
-async fn allows_two_running_registrations_at_most(db: PgPool) {
+async fn allows_two_registrations_per_period_at_most(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("m@student.ub.ac.id").await;
     let (_, other) = ctx.mahasiswa("n@student.ub.ac.id").await;
+    let first_posisi = ctx.posisi_berjalan(5).await;
     let ids = [
-        ctx.posisi_berjalan(5).await,
-        ctx.posisi_berjalan(5).await,
-        ctx.posisi_berjalan(5).await,
+        first_posisi,
+        ctx.posisi_seperiode(first_posisi).await,
+        ctx.posisi_seperiode(first_posisi).await,
     ];
+    let message = "Kamu sudah mendaftar 2 kali di periode ini.";
 
     let (first, _) = daftar_ok(&ctx, &cookie, ids[0]).await;
-    daftar_ok(&ctx, &cookie, ids[1]).await;
+    let (second, _) = daftar_ok(&ctx, &cookie, ids[1]).await;
 
     let response = ctx.daftar(&cookie, ids[2]).await;
-    assert_rejected(
-        response,
-        StatusCode::CONFLICT,
-        "Kamu sudah memiliki 2 pendaftaran yang sedang berjalan.",
-    )
-    .await;
+    assert_rejected(response, StatusCode::CONFLICT, message).await;
 
     // The limit belongs to each mahasiswa.
     daftar_ok(&ctx, &other, ids[2]).await;
 
-    for status in ["Selesai", "Batal/Mengundurkan Diri"] {
+    // Registrations that have ended still use up the period's two chances.
+    for status in ["Batal/Mengundurkan Diri", "Tidak Lolos", "Selesai"] {
         ctx.set_status(first, status).await;
+        ctx.set_status(second, "Tidak Lolos").await;
         let response = ctx.daftar(&cookie, ids[2]).await;
-        assert_eq!(response.status(), StatusCode::CREATED, "{status}");
-        let created = json_body(response).await;
-        ctx.set_status(created["id_pendaftaran"].as_i64().unwrap(), "Tidak Lolos")
-            .await;
+        assert_rejected(response, StatusCode::CONFLICT, message).await;
     }
+
+    // Hiding a position does not give its registration back.
+    sqlx::query("UPDATE posisi_magang SET deleted_at = now() WHERE id_posisi = $1")
+        .bind(ids[0])
+        .execute(&ctx.db)
+        .await
+        .unwrap();
+    let response = ctx.daftar(&cookie, ids[2]).await;
+    assert_rejected(response, StatusCode::CONFLICT, message).await;
+
+    // Another period starts with two new chances.
+    let next_period = ctx.posisi_berjalan(5).await;
+    daftar_ok(&ctx, &cookie, next_period).await;
 }
 
 #[sqlx::test]
@@ -793,10 +834,11 @@ async fn concurrent_requests_cannot_get_around_the_limits(db: PgPool) {
     assert_eq!(created, 1);
 
     let (_, other) = ctx.mahasiswa("n@student.ub.ac.id").await;
+    let first = ctx.posisi_berjalan(5).await;
     let ids = [
-        ctx.posisi_berjalan(5).await,
-        ctx.posisi_berjalan(5).await,
-        ctx.posisi_berjalan(5).await,
+        first,
+        ctx.posisi_seperiode(first).await,
+        ctx.posisi_seperiode(first).await,
     ];
     let (a, b, c) = tokio::join!(
         ctx.daftar(&other, ids[0]),
@@ -838,9 +880,9 @@ async fn only_mahasiswa_can_register(db: PgPool) {
     let response = post(&ctx.app, Some("access_token=bukan-jwt"), form(id_posisi)).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     assert_eq!(
-        ctx.daftar(&tim_mb, id_posisi).await.status(),
+        ctx.daftar(&panitia_magang, id_posisi).await.status(),
         StatusCode::FORBIDDEN
     );
 
@@ -855,14 +897,14 @@ async fn only_mahasiswa_can_register(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn the_owner_and_tim_mb_can_download_a_file(db: PgPool) {
+async fn the_owner_and_panitia_magang_can_download_a_file(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("m@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (_, id_berkas) = daftar_ok(&ctx, &cookie, id_posisi).await;
 
-    for who in [&cookie, &tim_mb] {
+    for who in [&cookie, &panitia_magang] {
         let response = download(&ctx.app, Some(who), &id_berkas).await;
 
         assert_eq!(response.status(), StatusCode::OK);
@@ -979,12 +1021,12 @@ async fn mahasiswa_lists_only_their_own(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn tim_mb_lists_everyone_in_every_status_newest_first(db: PgPool) {
+async fn panitia_magang_lists_everyone_in_every_status_newest_first(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(50).await;
 
-    let response = get(&ctx.app, Some(&tim_mb), URI).await;
+    let response = get(&ctx.app, Some(&panitia_magang), URI).await;
     assert_eq!(json_body(response).await["data"], serde_json::json!([]));
 
     let statuses = [
@@ -1011,7 +1053,7 @@ async fn tim_mb_lists_everyone_in_every_status_newest_first(db: PgPool) {
         .await
         .unwrap();
 
-    let list = json_body(get(&ctx.app, Some(&tim_mb), URI).await).await;
+    let list = json_body(get(&ctx.app, Some(&panitia_magang), URI).await).await;
 
     let mut expected: Vec<i64> = created[1..].iter().rev().copied().collect();
     expected.insert(0, created[0]);
@@ -1150,16 +1192,16 @@ async fn detail_shows_the_later_stages(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn detail_is_only_for_the_owner_and_tim_mb(db: PgPool) {
+async fn detail_is_only_for_the_owner_and_panitia_magang(db: PgPool) {
     let ctx = setup(db);
     let (owner, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
     let (_, other) = ctx.mahasiswa("b@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
     let uri = format!("{URI}/{id}");
 
-    let response = get(&ctx.app, Some(&tim_mb), &uri).await;
+    let response = get(&ctx.app, Some(&panitia_magang), &uri).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         json_body(response).await["mahasiswa"]["id_pengguna"],
@@ -1192,9 +1234,9 @@ async fn detail_is_only_for_the_owner_and_tim_mb(db: PgPool) {
 async fn detail_of_something_missing_finds_nothing(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
 
-    for who in [&cookie, &tim_mb] {
+    for who in [&cookie, &panitia_magang] {
         let response = get(&ctx.app, Some(who), &format!("{URI}/999999")).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let response = get(&ctx.app, Some(who), &format!("{URI}/abc")).await;
@@ -1207,7 +1249,7 @@ async fn stopping_the_period_closes_registration_and_keeps_what_was_sent(db: PgP
     let ctx = setup(db);
     let (_, first) = ctx.mahasiswa("a@student.ub.ac.id").await;
     let (_, second) = ctx.mahasiswa("b@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (id_pendaftaran, _) = daftar_ok(&ctx, &first, id_posisi).await;
 
@@ -1220,7 +1262,7 @@ async fn stopping_the_period_closes_registration_and_keeps_what_was_sent(db: PgP
     let request = Request::builder()
         .method("PATCH")
         .uri(format!("/api/v1/periode/{id_periode}/stop"))
-        .header(header::COOKIE, &tim_mb)
+        .header(header::COOKIE, &panitia_magang)
         .body(Body::empty())
         .unwrap();
     let response = ctx.app.clone().oneshot(request).await.unwrap();
@@ -1280,6 +1322,10 @@ async fn ubah_status(app: &Router, cookie: &str, id: i64, status: &str) -> Respo
 }
 
 impl Ctx {
+    fn email_terkirim(&self) -> Vec<Email> {
+        self.email.lock().unwrap().clone()
+    }
+
     /// The status, the updated_at and the number of log rows, to check that nothing changed.
     async fn snapshot(&self, id: i64) -> (String, String, i64) {
         sqlx::query_as(
@@ -1297,18 +1343,18 @@ impl Ctx {
 }
 
 #[sqlx::test]
-async fn tim_mb_changes_a_status_and_it_is_logged(db: PgPool) {
+async fn panitia_magang_changes_a_status_and_it_is_logged(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
-    let id_tim_mb: i32 = sqlx::query_scalar("SELECT id_pengguna FROM tim_mb")
+    let id_panitia_magang: i32 = sqlx::query_scalar("SELECT id_pengguna FROM panitia_magang")
         .fetch_one(&ctx.db)
         .await
         .unwrap();
 
-    let response = ubah_status(&ctx.app, &tim_mb, id, "Lolos Seleksi Administrasi").await;
+    let response = ubah_status(&ctx.app, &panitia_magang, id, "Lolos Seleksi Administrasi").await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let detail = json_body(response).await;
@@ -1339,15 +1385,114 @@ async fn tim_mb_changes_a_status_and_it_is_logged(db: PgPool) {
     .fetch_one(&ctx.db)
     .await
     .unwrap();
-    assert_eq!(id_pengubah, Some(id_tim_mb));
+    assert_eq!(id_pengubah, Some(id_panitia_magang));
     assert!(is_wib);
+}
+
+#[sqlx::test]
+async fn a_status_change_emails_the_mahasiswa(db: PgPool) {
+    let ctx = setup(db);
+    let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
+    let panitia_magang = ctx.panitia_magang().await;
+    let id_posisi = ctx.posisi_berjalan(5).await;
+    let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
+    assert!(ctx.email_terkirim().is_empty());
+
+    let response = ubah_status(&ctx.app, &panitia_magang, id, "Lolos Seleksi Administrasi").await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let detail = json_body(response).await;
+
+    let terkirim = ctx.email_terkirim();
+    assert_eq!(terkirim.len(), 1);
+    let email = &terkirim[0];
+    assert_eq!(email.kepada, "a@student.ub.ac.id");
+    assert_eq!(
+        email.subjek,
+        "Status pendaftaran magang: Lolos Seleksi Administrasi"
+    );
+    assert!(email.isi.starts_with("Halo Budi,"), "{}", email.isi);
+    for bagian in [
+        format!("Posisi      : {}", detail["posisi"].as_str().unwrap()),
+        format!(
+            "Perusahaan  : {}",
+            detail["perusahaan"]["nama_perusahaan"].as_str().unwrap()
+        ),
+        "Status lama : Menunggu Verifikasi".to_string(),
+        "Status baru : Lolos Seleksi Administrasi".to_string(),
+        "http://frontend.test".to_string(),
+    ] {
+        assert!(
+            email.isi.contains(&bagian),
+            "{bagian} missing in {}",
+            email.isi
+        );
+    }
+
+    let html = email.html.as_ref().unwrap();
+    let cid: Vec<_> = html.gambar.iter().map(|gambar| gambar.cid).collect();
+    assert_eq!(cid, ["logo", "ikon-berhasil"]);
+    for bagian in [
+        "cid:logo",
+        "cid:ikon-berhasil",
+        "Kamu lolos seleksi administrasi",
+        "Halo Budi,",
+        &format!("href=\"http://frontend.test/dasbor/{id}\""),
+    ] {
+        assert!(
+            html.isi.contains(bagian),
+            "{bagian} missing in {}",
+            html.isi
+        );
+    }
+    assert!(!html.isi.contains("{{"));
+}
+
+#[sqlx::test]
+async fn a_rejection_email_shows_a_red_mark_and_escapes_the_data(db: PgPool) {
+    let ctx = setup(db);
+    let (user, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
+    sqlx::query("UPDATE mahasiswa SET nama = '<b>Budi</b> & Ani' WHERE id_pengguna = $1")
+        .bind(user.id_pengguna)
+        .execute(&ctx.db)
+        .await
+        .unwrap();
+    let panitia_magang = ctx.panitia_magang().await;
+    let id_posisi = ctx.posisi_berjalan(5).await;
+    let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
+
+    let response = ubah_status(&ctx.app, &panitia_magang, id, "Tidak Lolos").await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let terkirim = ctx.email_terkirim();
+    let html = terkirim[0].html.as_ref().unwrap();
+    let cid: Vec<_> = html.gambar.iter().map(|gambar| gambar.cid).collect();
+    assert_eq!(cid, ["logo", "ikon-gagal"]);
+    assert!(html.isi.contains("cid:ikon-gagal"));
+    assert!(html.isi.contains("Halo &lt;b&gt;Budi&lt;/b&gt; &amp; Ani,"));
+    assert!(!html.isi.contains("<b>Budi</b>"));
+}
+
+#[sqlx::test]
+async fn a_rejected_status_change_sends_no_email(db: PgPool) {
+    let ctx = setup(db);
+    let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
+    let panitia_magang = ctx.panitia_magang().await;
+    let id_posisi = ctx.posisi_berjalan(5).await;
+    let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
+
+    let response = ubah_status(&ctx.app, &panitia_magang, id, "Selesai").await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response = ubah_status(&ctx.app, &panitia_magang, id + 1000, "Tidak Lolos").await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    assert!(ctx.email_terkirim().is_empty());
 }
 
 #[sqlx::test]
 async fn only_the_allowed_changes_go_through(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
 
@@ -1356,7 +1501,7 @@ async fn only_the_allowed_changes_go_through(db: PgPool) {
             ctx.set_status(id, lama).await;
             let before = ctx.snapshot(id).await;
 
-            let response = ubah_status(&ctx.app, &tim_mb, id, baru).await;
+            let response = ubah_status(&ctx.app, &panitia_magang, id, baru).await;
 
             if ALLOWED.contains(&(lama, baru)) {
                 assert_eq!(response.status(), StatusCode::OK, "{lama} -> {baru}");
@@ -1378,11 +1523,11 @@ async fn only_the_allowed_changes_go_through(db: PgPool) {
 async fn a_status_change_leaves_the_quota_alone(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(1).await;
     let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
 
-    let response = ubah_status(&ctx.app, &tim_mb, id, "Tidak Lolos").await;
+    let response = ubah_status(&ctx.app, &panitia_magang, id, "Tidak Lolos").await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(ctx.kuota(id_posisi).await, 1);
 
@@ -1395,7 +1540,7 @@ async fn a_status_change_leaves_the_quota_alone(db: PgPool) {
 async fn a_status_can_change_after_the_period_has_ended(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
     sqlx::query(
@@ -1407,7 +1552,7 @@ async fn a_status_can_change_after_the_period_has_ended(db: PgPool) {
     .await
     .unwrap();
 
-    let response = ubah_status(&ctx.app, &tim_mb, id, "Lolos Seleksi Administrasi").await;
+    let response = ubah_status(&ctx.app, &panitia_magang, id, "Lolos Seleksi Administrasi").await;
 
     assert_eq!(response.status(), StatusCode::OK);
 }
@@ -1416,14 +1561,14 @@ async fn a_status_can_change_after_the_period_has_ended(db: PgPool) {
 async fn rejects_bad_status_bodies_without_changing_anything(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
     let before = ctx.snapshot(id).await;
     let query = format!("?id={id}");
 
     for status in ["Lulus", "", "diterima", " Diterima"] {
-        let response = ubah_status(&ctx.app, &tim_mb, id, status).await;
+        let response = ubah_status(&ctx.app, &panitia_magang, id, status).await;
         assert_rejected(
             response,
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1439,7 +1584,7 @@ async fn rejects_bad_status_bodies_without_changing_anything(db: PgPool) {
         r#"{ "id_status": 2 }"#,
         r#"{ "status": "Diterima", "id_status": 2 }"#,
     ] {
-        let response = patch_status(&ctx.app, Some(&tim_mb), &query, body).await;
+        let response = patch_status(&ctx.app, Some(&panitia_magang), &query, body).await;
         assert_eq!(
             response.status(),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -1447,13 +1592,13 @@ async fn rejects_bad_status_bodies_without_changing_anything(db: PgPool) {
         );
     }
 
-    let response = patch_status(&ctx.app, Some(&tim_mb), &query, "bukan json").await;
+    let response = patch_status(&ctx.app, Some(&panitia_magang), &query, "bukan json").await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let request = Request::builder()
         .method("PATCH")
         .uri(format!("{URI}{query}"))
-        .header(header::COOKIE, &tim_mb)
+        .header(header::COOKIE, &panitia_magang)
         .body(Body::from(r#"{ "status": "Tidak Lolos" }"#))
         .unwrap();
     let response = ctx.app.clone().oneshot(request).await.unwrap();
@@ -1465,20 +1610,20 @@ async fn rejects_bad_status_bodies_without_changing_anything(db: PgPool) {
 #[sqlx::test]
 async fn changing_a_status_needs_a_valid_id(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let body = r#"{ "status": "Tidak Lolos" }"#;
 
     for query in ["", "?id=abc", "?id="] {
-        let response = patch_status(&ctx.app, Some(&tim_mb), query, body).await;
+        let response = patch_status(&ctx.app, Some(&panitia_magang), query, body).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
     }
 
-    let response = patch_status(&ctx.app, Some(&tim_mb), "?id=999999", body).await;
+    let response = patch_status(&ctx.app, Some(&panitia_magang), "?id=999999", body).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_change_a_status(db: PgPool) {
+async fn only_panitia_magang_can_change_a_status(db: PgPool) {
     let ctx = setup(db);
     let (_, owner) = ctx.mahasiswa("a@student.ub.ac.id").await;
     let (_, other) = ctx.mahasiswa("b@student.ub.ac.id").await;
@@ -1507,15 +1652,15 @@ async fn only_tim_mb_can_change_a_status(db: PgPool) {
 async fn only_one_of_several_concurrent_changes_wins(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
 
     let (a, b, c, d) = tokio::join!(
-        ubah_status(&ctx.app, &tim_mb, id, "Lolos Seleksi Administrasi"),
-        ubah_status(&ctx.app, &tim_mb, id, "Lolos Seleksi Administrasi"),
-        ubah_status(&ctx.app, &tim_mb, id, "Tidak Lolos"),
-        ubah_status(&ctx.app, &tim_mb, id, "Tidak Lolos"),
+        ubah_status(&ctx.app, &panitia_magang, id, "Lolos Seleksi Administrasi"),
+        ubah_status(&ctx.app, &panitia_magang, id, "Lolos Seleksi Administrasi"),
+        ubah_status(&ctx.app, &panitia_magang, id, "Tidak Lolos"),
+        ubah_status(&ctx.app, &panitia_magang, id, "Tidak Lolos"),
     );
 
     let statuses = [a.status(), b.status(), c.status(), d.status()];
@@ -1809,16 +1954,16 @@ async fn a_place_can_be_accepted_after_the_period_has_ended(db: PgPool) {
 async fn the_whole_flow_runs_from_registering_to_selesai(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (id, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
 
     for status in ["Lolos Seleksi Administrasi", "Diterima"] {
-        let response = ubah_status(&ctx.app, &tim_mb, id, status).await;
+        let response = ubah_status(&ctx.app, &panitia_magang, id, status).await;
         assert_eq!(response.status(), StatusCode::OK, "{status}");
     }
     assert_eq!(terima(&ctx.app, &cookie, id).await.status(), StatusCode::OK);
-    let response = ubah_status(&ctx.app, &tim_mb, id, "Selesai").await;
+    let response = ubah_status(&ctx.app, &panitia_magang, id, "Selesai").await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(ctx.status_of(id).await, "Selesai");
 }
@@ -1828,7 +1973,7 @@ async fn only_the_owner_can_accept(db: PgPool) {
     let ctx = setup(db);
     let (_, owner) = ctx.mahasiswa("a@student.ub.ac.id").await;
     let (_, other) = ctx.mahasiswa("b@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let user = insert_pengguna(&ctx.db, "tanpa.peran@gmail.com").await;
     let no_role = cookie_for(&ctx.state, &user);
     let target = ctx.pendaftaran(&owner, "Diterima").await;
@@ -1840,7 +1985,7 @@ async fn only_the_owner_can_accept(db: PgPool) {
     let response = accept(&ctx.app, Some("access_token=bukan-jwt"), &query).await;
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
 
-    for cookie in [&other, &tim_mb, &no_role] {
+    for cookie in [&other, &panitia_magang, &no_role] {
         let response = accept(&ctx.app, Some(cookie), &query).await;
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
@@ -1916,17 +2061,17 @@ async fn a_registration_racing_an_accept_cannot_stay_running(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn a_tim_mb_change_racing_an_accept_keeps_the_log_in_order(db: PgPool) {
+async fn a_panitia_magang_change_racing_an_accept_keeps_the_log_in_order(db: PgPool) {
     let ctx = setup(db);
     let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let target = ctx.pendaftaran(&cookie, "Diterima").await;
     let id_posisi = ctx.posisi_berjalan(5).await;
     let (other, _) = daftar_ok(&ctx, &cookie, id_posisi).await;
 
     let (accepted, _) = tokio::join!(
         terima(&ctx.app, &cookie, target),
-        ubah_status(&ctx.app, &tim_mb, other, "Tidak Lolos"),
+        ubah_status(&ctx.app, &panitia_magang, other, "Tidak Lolos"),
     );
     assert_eq!(accepted.status(), StatusCode::OK);
 
@@ -2019,14 +2164,14 @@ fn jadwal_awal() -> Option<(String, String, String)> {
 #[sqlx::test]
 async fn saves_the_same_jadwal_on_every_pendaftaran_listed(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, cookie_a) = ctx.pendaftaran_baru("a", LOLOS).await;
     let (b, _) = ctx.pendaftaran_baru("b", LOLOS).await;
     let (c, _) = ctx.pendaftaran_baru("c", LOLOS).await;
     let (bukan, _) = ctx.pendaftaran_baru("d", LOLOS).await;
     let before = ctx.snapshot(a).await;
 
-    let response = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[c, a, b])).await;
+    let response = put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[c, a, b])).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         json_body(response).await,
@@ -2043,8 +2188,8 @@ async fn saves_the_same_jadwal_on_every_pendaftaran_listed(db: PgPool) {
     }
     assert_eq!(ctx.jadwal_of(bukan).await, None);
 
-    // The owner and Tim MB both see it in the detail.
-    for cookie in [&cookie_a, &tim_mb] {
+    // The owner and Panitia Magang both see it in the detail.
+    for cookie in [&cookie_a, &panitia_magang] {
         let response = get(&ctx.app, Some(cookie), &format!("{URI}/{a}")).await;
         let detail = json_body(response).await;
         assert_eq!(
@@ -2067,11 +2212,11 @@ async fn saves_the_same_jadwal_on_every_pendaftaran_listed(db: PgPool) {
 #[sqlx::test]
 async fn saving_again_replaces_the_jadwal(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (lama, _) = ctx.pendaftaran_baru("a", LOLOS).await;
     let (baru, _) = ctx.pendaftaran_baru("b", LOLOS).await;
 
-    let response = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[lama])).await;
+    let response = put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[lama])).await;
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = serde_json::json!({
@@ -2080,7 +2225,7 @@ async fn saving_again_replaces_the_jadwal(db: PgPool) {
         "jam": "09:00",
         "lokasi": "Daring (Zoom)",
     });
-    let response = put_jadwal(&ctx.app, Some(&tim_mb), body).await;
+    let response = put_jadwal(&ctx.app, Some(&panitia_magang), body).await;
     assert_eq!(response.status(), StatusCode::OK);
 
     let expected = Some((
@@ -2096,10 +2241,10 @@ async fn saving_again_replaces_the_jadwal(db: PgPool) {
 #[sqlx::test]
 async fn an_id_listed_twice_counts_once(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
 
-    let response = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[a, a, a])).await;
+    let response = put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[a, a, a])).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         json_body(response).await["id_pendaftaran"],
@@ -2111,7 +2256,7 @@ async fn an_id_listed_twice_counts_once(db: PgPool) {
 #[sqlx::test]
 async fn one_pendaftaran_in_another_status_stops_them_all(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
 
     for status in STATUSES.into_iter().filter(|s| *s != LOLOS) {
         let nama = status.replace(['/', ' '], ".");
@@ -2119,7 +2264,12 @@ async fn one_pendaftaran_in_another_status_stops_them_all(db: PgPool) {
         let (lolos, _) = ctx.pendaftaran_baru(&format!("{nama}.b"), LOLOS).await;
         let (lain, _) = ctx.pendaftaran_baru(&format!("{nama}.c"), status).await;
 
-        let response = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[punya_jadwal])).await;
+        let response = put_jadwal(
+            &ctx.app,
+            Some(&panitia_magang),
+            jadwal_body(&[punya_jadwal]),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::OK);
         let before = ctx.snapshot(punya_jadwal).await;
 
@@ -2129,7 +2279,7 @@ async fn one_pendaftaran_in_another_status_stops_them_all(db: PgPool) {
             "jam": "09:00",
             "lokasi": "Daring (Zoom)",
         });
-        let response = put_jadwal(&ctx.app, Some(&tim_mb), body).await;
+        let response = put_jadwal(&ctx.app, Some(&panitia_magang), body).await;
         assert_rejected(response, StatusCode::CONFLICT, BUKAN_LOLOS).await;
 
         assert_eq!(ctx.jadwal_of(punya_jadwal).await, jadwal_awal(), "{status}");
@@ -2142,10 +2292,10 @@ async fn one_pendaftaran_in_another_status_stops_them_all(db: PgPool) {
 #[sqlx::test]
 async fn one_missing_pendaftaran_stops_them_all(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
 
-    let response = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[a, 999_999])).await;
+    let response = put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[a, 999_999])).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(ctx.jadwal_of(a).await, None);
 }
@@ -2153,7 +2303,7 @@ async fn one_missing_pendaftaran_stops_them_all(db: PgPool) {
 #[sqlx::test]
 async fn rejects_bad_jadwal_without_saving(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
     let before = ctx.snapshot(a).await;
     let kemarin = ctx.tanggal(-1).await;
@@ -2192,7 +2342,7 @@ async fn rejects_bad_jadwal_without_saving(db: PgPool) {
     for (field, value, message) in cases {
         let mut body = jadwal_body(&[a]);
         body[field] = value;
-        let response = put_jadwal(&ctx.app, Some(&tim_mb), body).await;
+        let response = put_jadwal(&ctx.app, Some(&panitia_magang), body).await;
         assert_rejected(response, StatusCode::UNPROCESSABLE_ENTITY, message).await;
     }
 
@@ -2200,7 +2350,7 @@ async fn rejects_bad_jadwal_without_saving(db: PgPool) {
     for field in ["id_pendaftaran", "tanggal", "jam", "lokasi"] {
         let mut body = jadwal_body(&[a]);
         body.as_object_mut().unwrap().remove(field);
-        let response = put_jadwal(&ctx.app, Some(&tim_mb), body).await;
+        let response = put_jadwal(&ctx.app, Some(&panitia_magang), body).await;
         assert_eq!(
             response.status(),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -2216,20 +2366,20 @@ async fn rejects_bad_jadwal_without_saving(db: PgPool) {
         "lokasi": "Malang",
     });
     for body in [extra, bad_ids] {
-        let response = put_jadwal(&ctx.app, Some(&tim_mb), body).await;
+        let response = put_jadwal(&ctx.app, Some(&panitia_magang), body).await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     let response = put_jadwal_raw(
         &ctx.app,
-        Some(&tim_mb),
+        Some(&panitia_magang),
         Some("application/json"),
         "{".to_string(),
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = jadwal_body(&[a]).to_string();
-    let response = put_jadwal_raw(&ctx.app, Some(&tim_mb), None, body).await;
+    let response = put_jadwal_raw(&ctx.app, Some(&panitia_magang), None, body).await;
     assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 
     assert_eq!(ctx.jadwal_of(a).await, None);
@@ -2239,7 +2389,7 @@ async fn rejects_bad_jadwal_without_saving(db: PgPool) {
 #[sqlx::test]
 async fn accepts_today_and_the_limits_of_each_field(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
     let hari_ini = ctx.tanggal(0).await;
     let lokasi = "é".repeat(255);
@@ -2251,7 +2401,7 @@ async fn accepts_today_and_the_limits_of_each_field(db: PgPool) {
             "jam": jam,
             "lokasi": format!("  {lokasi}  "),
         });
-        let response = put_jadwal(&ctx.app, Some(&tim_mb), body).await;
+        let response = put_jadwal(&ctx.app, Some(&panitia_magang), body).await;
         assert_eq!(response.status(), StatusCode::OK, "{jam}");
         assert_eq!(
             ctx.jadwal_of(a).await,
@@ -2261,7 +2411,7 @@ async fn accepts_today_and_the_limits_of_each_field(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_save_a_jadwal(db: PgPool) {
+async fn only_panitia_magang_can_save_a_jadwal(db: PgPool) {
     let ctx = setup(db);
     let (a, owner) = ctx.pendaftaran_baru("a", LOLOS).await;
     let (_, other) = ctx.mahasiswa("b@student.ub.ac.id").await;
@@ -2285,7 +2435,7 @@ async fn only_tim_mb_can_save_a_jadwal(db: PgPool) {
 #[sqlx::test]
 async fn overlapping_saves_end_with_one_jadwal_for_all(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
     let (b, _) = ctx.pendaftaran_baru("b", LOLOS).await;
 
@@ -2298,8 +2448,8 @@ async fn overlapping_saves_end_with_one_jadwal_for_all(db: PgPool) {
         })
     };
     let (first, second) = tokio::join!(
-        put_jadwal(&ctx.app, Some(&tim_mb), isi([a, b], "Satu")),
-        put_jadwal(&ctx.app, Some(&tim_mb), isi([b, a], "Dua")),
+        put_jadwal(&ctx.app, Some(&panitia_magang), isi([a, b], "Satu")),
+        put_jadwal(&ctx.app, Some(&panitia_magang), isi([b, a], "Dua")),
     );
 
     assert_eq!(first.status(), StatusCode::OK);
@@ -2311,12 +2461,12 @@ async fn overlapping_saves_end_with_one_jadwal_for_all(db: PgPool) {
 #[sqlx::test]
 async fn a_status_change_racing_a_save_cannot_leave_a_jadwal_on_a_rejected_one(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
 
     let (saved, changed) = tokio::join!(
-        put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[a])),
-        ubah_status(&ctx.app, &tim_mb, a, "Tidak Lolos"),
+        put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[a])),
+        ubah_status(&ctx.app, &panitia_magang, a, "Tidak Lolos"),
     );
 
     assert_eq!(changed.status(), StatusCode::OK);
@@ -2358,21 +2508,21 @@ async fn insert_plotting(db: &PgPool, id: i64) {
 #[sqlx::test]
 async fn the_list_says_whether_jadwal_and_plotting_are_filled_in(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, owner) = ctx.pendaftaran_baru("a", LOLOS).await;
     let (other, _) = ctx.pendaftaran_baru("b", LOLOS).await;
     let (no, yes) = (Value::Bool(false), Value::Bool(true));
 
-    for cookie in [&owner, &tim_mb] {
+    for cookie in [&owner, &panitia_magang] {
         assert_eq!(
             flags_in_list(&ctx, cookie, a).await,
             (no.clone(), no.clone())
         );
     }
 
-    let response = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[a])).await;
+    let response = put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[a])).await;
     assert_eq!(response.status(), StatusCode::OK);
-    for cookie in [&owner, &tim_mb] {
+    for cookie in [&owner, &panitia_magang] {
         assert_eq!(
             flags_in_list(&ctx, cookie, a).await,
             (yes.clone(), no.clone())
@@ -2380,7 +2530,7 @@ async fn the_list_says_whether_jadwal_and_plotting_are_filled_in(db: PgPool) {
     }
 
     insert_plotting(&ctx.db, a).await;
-    for cookie in [&owner, &tim_mb] {
+    for cookie in [&owner, &panitia_magang] {
         assert_eq!(
             flags_in_list(&ctx, cookie, a).await,
             (yes.clone(), yes.clone())
@@ -2389,7 +2539,7 @@ async fn the_list_says_whether_jadwal_and_plotting_are_filled_in(db: PgPool) {
 
     // Each pendaftaran answers for itself.
     assert_eq!(
-        flags_in_list(&ctx, &tim_mb, other).await,
+        flags_in_list(&ctx, &panitia_magang, other).await,
         (no.clone(), no.clone())
     );
 }
@@ -2397,13 +2547,13 @@ async fn the_list_says_whether_jadwal_and_plotting_are_filled_in(db: PgPool) {
 #[sqlx::test]
 async fn the_list_flags_each_field_on_its_own(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", "Aktif").await;
 
     insert_plotting(&ctx.db, a).await;
 
     assert_eq!(
-        flags_in_list(&ctx, &tim_mb, a).await,
+        flags_in_list(&ctx, &panitia_magang, a).await,
         (Value::Bool(false), Value::Bool(true))
     );
 }
@@ -2411,16 +2561,16 @@ async fn the_list_flags_each_field_on_its_own(db: PgPool) {
 #[sqlx::test]
 async fn the_list_keeps_the_flags_after_the_status_moves_on(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
 
-    let response = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[a])).await;
+    let response = put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[a])).await;
     assert_eq!(response.status(), StatusCode::OK);
-    let response = ubah_status(&ctx.app, &tim_mb, a, "Diterima").await;
+    let response = ubah_status(&ctx.app, &panitia_magang, a, "Diterima").await;
     assert_eq!(response.status(), StatusCode::OK);
 
     assert_eq!(
-        flags_in_list(&ctx, &tim_mb, a).await,
+        flags_in_list(&ctx, &panitia_magang, a).await,
         (Value::Bool(true), Value::Bool(false))
     );
 }
@@ -2428,10 +2578,10 @@ async fn the_list_keeps_the_flags_after_the_status_moves_on(db: PgPool) {
 #[sqlx::test]
 async fn the_detail_does_not_repeat_the_flags(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
 
-    let response = get(&ctx.app, Some(&tim_mb), &format!("{URI}/{a}")).await;
+    let response = get(&ctx.app, Some(&panitia_magang), &format!("{URI}/{a}")).await;
     let detail = json_body(response).await;
     assert!(detail.get("ada_jadwal_seleksi").is_none());
     assert!(detail.get("ada_plotting_dpm").is_none());
@@ -2490,10 +2640,10 @@ impl Ctx {
 #[sqlx::test]
 async fn saving_a_jadwal_sees_a_status_changed_while_it_waited(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
 
-    let request = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[a]));
+    let request = put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[a]));
     let response = ctx.while_status_changes_to(a, "Tidak Lolos", request).await;
 
     assert_rejected(response, StatusCode::CONFLICT, BUKAN_LOLOS).await;
@@ -2503,10 +2653,10 @@ async fn saving_a_jadwal_sees_a_status_changed_while_it_waited(db: PgPool) {
 #[sqlx::test]
 async fn saving_a_jadwal_accepts_a_status_that_became_valid_while_it_waited(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", "Menunggu Verifikasi").await;
 
-    let request = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[a]));
+    let request = put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[a]));
     let response = ctx.while_status_changes_to(a, LOLOS, request).await;
 
     assert_eq!(response.status(), StatusCode::OK);
@@ -2516,11 +2666,11 @@ async fn saving_a_jadwal_accepts_a_status_that_became_valid_while_it_waited(db: 
 #[sqlx::test]
 async fn changing_a_status_checks_against_the_one_set_while_it_waited(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
 
     // Allowed from the status set meanwhile, though not from the one it started with.
     let (a, _) = ctx.pendaftaran_baru("a", "Menunggu Verifikasi").await;
-    let request = ubah_status(&ctx.app, &tim_mb, a, "Diterima");
+    let request = ubah_status(&ctx.app, &panitia_magang, a, "Diterima");
     let response = ctx.while_status_changes_to(a, LOLOS, request).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(ctx.status_of(a).await, "Diterima");
@@ -2532,7 +2682,7 @@ async fn changing_a_status_checks_against_the_one_set_while_it_waited(db: PgPool
 
     // Not allowed from the status set meanwhile, though allowed from the one it started with.
     let (b, _) = ctx.pendaftaran_baru("b", "Menunggu Verifikasi").await;
-    let request = ubah_status(&ctx.app, &tim_mb, b, LOLOS);
+    let request = ubah_status(&ctx.app, &panitia_magang, b, LOLOS);
     let response = ctx.while_status_changes_to(b, "Tidak Lolos", request).await;
     assert_rejected(
         response,
@@ -2616,20 +2766,20 @@ async fn halaman(ctx: &Ctx, cookie: &str, query: &str) -> Value {
 #[sqlx::test]
 async fn pages_split_the_list_newest_first_without_overlap(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let created = ctx.banyak_pendaftaran(5).await;
     let newest_first: Vec<i64> = created.iter().rev().copied().collect();
 
-    let first = halaman(&ctx, &tim_mb, "?p=1&r=2").await;
+    let first = halaman(&ctx, &panitia_magang, "?p=1&r=2").await;
     assert_eq!(ids(&first), newest_first[0..2]);
     assert_eq!(info_halaman(&first), (1, 2, 5, 3));
 
-    let second = halaman(&ctx, &tim_mb, "?p=2&r=2").await;
+    let second = halaman(&ctx, &panitia_magang, "?p=2&r=2").await;
     assert_eq!(ids(&second), newest_first[2..4]);
     assert_eq!(info_halaman(&second), (2, 2, 5, 3));
 
     // The last page holds what is left.
-    let last = halaman(&ctx, &tim_mb, "?p=3&r=2").await;
+    let last = halaman(&ctx, &panitia_magang, "?p=3&r=2").await;
     assert_eq!(ids(&last), newest_first[4..5]);
     assert_eq!(info_halaman(&last), (3, 2, 5, 3));
 }
@@ -2637,11 +2787,11 @@ async fn pages_split_the_list_newest_first_without_overlap(db: PgPool) {
 #[sqlx::test]
 async fn total_pages_is_rounded_up_only_when_needed(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     ctx.banyak_pendaftaran(4).await;
 
     for (rows, pages) in [(1, 4), (2, 2), (3, 2), (4, 1), (5, 1), (100, 1)] {
-        let list = halaman(&ctx, &tim_mb, &format!("?p=1&r={rows}")).await;
+        let list = halaman(&ctx, &panitia_magang, &format!("?p=1&r={rows}")).await;
         assert_eq!(list["total_pages"], pages, "{rows}");
         assert_eq!(list["total"], 4, "{rows}");
     }
@@ -2650,15 +2800,15 @@ async fn total_pages_is_rounded_up_only_when_needed(db: PgPool) {
 #[sqlx::test]
 async fn a_page_out_of_range_is_empty_but_still_says_the_totals(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     ctx.banyak_pendaftaran(3).await;
 
-    let list = halaman(&ctx, &tim_mb, "?p=9&r=2").await;
+    let list = halaman(&ctx, &panitia_magang, "?p=9&r=2").await;
     assert_eq!(list["data"], serde_json::json!([]));
     assert_eq!(info_halaman(&list), (9, 2, 3, 2));
 
     // Large values cannot overflow the offset.
-    let list = halaman(&ctx, &tim_mb, "?p=2147483647&r=2147483647").await;
+    let list = halaman(&ctx, &panitia_magang, "?p=2147483647&r=2147483647").await;
     assert_eq!(list["data"], serde_json::json!([]));
     assert_eq!(list["total"], 3);
 }
@@ -2666,21 +2816,21 @@ async fn a_page_out_of_range_is_empty_but_still_says_the_totals(db: PgPool) {
 #[sqlx::test]
 async fn without_p_and_r_it_is_page_1_of_25_rows(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
 
-    let empty = halaman(&ctx, &tim_mb, "").await;
+    let empty = halaman(&ctx, &panitia_magang, "").await;
     assert_eq!(empty["data"], serde_json::json!([]));
     assert_eq!(info_halaman(&empty), (1, 25, 0, 0));
 
     let created = ctx.banyak_pendaftaran(27).await;
     let newest_first: Vec<i64> = created.iter().rev().copied().collect();
 
-    let list = halaman(&ctx, &tim_mb, "").await;
+    let list = halaman(&ctx, &panitia_magang, "").await;
     assert_eq!(ids(&list), newest_first[0..25]);
     assert_eq!(info_halaman(&list), (1, 25, 27, 2));
 
     // Only p means 25 rows per page.
-    let list = halaman(&ctx, &tim_mb, "?p=2").await;
+    let list = halaman(&ctx, &panitia_magang, "?p=2").await;
     assert_eq!(ids(&list), newest_first[25..27]);
     assert_eq!(info_halaman(&list), (2, 25, 27, 2));
 }
@@ -2688,10 +2838,10 @@ async fn without_p_and_r_it_is_page_1_of_25_rows(db: PgPool) {
 #[sqlx::test]
 async fn only_r_means_the_first_page(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let created = ctx.banyak_pendaftaran(3).await;
 
-    let list = halaman(&ctx, &tim_mb, "?r=2").await;
+    let list = halaman(&ctx, &panitia_magang, "?r=2").await;
     assert_eq!(ids(&list), [created[2], created[1]]);
     assert_eq!(info_halaman(&list), (1, 2, 3, 2));
 }
@@ -2699,9 +2849,9 @@ async fn only_r_means_the_first_page(db: PgPool) {
 #[sqlx::test]
 async fn empty_list_has_no_pages_when_paged(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
 
-    let list = halaman(&ctx, &tim_mb, "?p=1&r=10").await;
+    let list = halaman(&ctx, &panitia_magang, "?p=1&r=10").await;
     assert_eq!(list["data"], serde_json::json!([]));
     assert_eq!(info_halaman(&list), (1, 10, 0, 0));
 }
@@ -2728,10 +2878,10 @@ async fn pages_of_a_mahasiswa_only_count_their_own(db: PgPool) {
 #[sqlx::test]
 async fn rejects_bad_p_and_r(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
 
     for query in ["?p=0&r=10", "?p=1&r=0", "?p=-1&r=10", "?p=1&r=-5", "?r=0"] {
-        let response = get(&ctx.app, Some(&tim_mb), &format!("{URI}{query}")).await;
+        let response = get(&ctx.app, Some(&panitia_magang), &format!("{URI}{query}")).await;
         assert_rejected(
             response,
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -2754,7 +2904,7 @@ async fn rejects_bad_p_and_r(db: PgPool) {
         "?status=",
         "?id_periode=1",
     ] {
-        let response = get(&ctx.app, Some(&tim_mb), &format!("{URI}{query}")).await;
+        let response = get(&ctx.app, Some(&panitia_magang), &format!("{URI}{query}")).await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{query}");
     }
 }
@@ -2762,13 +2912,13 @@ async fn rejects_bad_p_and_r(db: PgPool) {
 #[sqlx::test]
 async fn paging_keeps_the_fields_of_each_row(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", LOLOS).await;
-    let response = put_jadwal(&ctx.app, Some(&tim_mb), jadwal_body(&[a])).await;
+    let response = put_jadwal(&ctx.app, Some(&panitia_magang), jadwal_body(&[a])).await;
     assert_eq!(response.status(), StatusCode::OK);
 
-    let paged = halaman(&ctx, &tim_mb, "?p=1&r=1").await;
-    let whole = halaman(&ctx, &tim_mb, "").await;
+    let paged = halaman(&ctx, &panitia_magang, "?p=1&r=1").await;
+    let whole = halaman(&ctx, &panitia_magang, "").await;
     assert_eq!(paged["data"], whole["data"]);
     assert_eq!(paged["data"][0]["ada_jadwal_seleksi"], true);
 }
@@ -2872,7 +3022,7 @@ fn sorted(mut ids: Vec<i64>) -> Vec<i64> {
 #[sqlx::test]
 async fn filters_each_narrow_the_list_and_its_totals(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let pos = ctx.posisi_filter().await;
 
     let a = ctx.pendaftaran_di("a", pos.a, LOLOS).await;
@@ -2892,21 +3042,21 @@ async fn filters_each_narrow_the_list_and_its_totals(db: PgPool) {
         (format!("?posisi={}", pos.c), vec![c]),
     ];
     for (query, expected) in cases {
-        let list = halaman(&ctx, &tim_mb, &query).await;
+        let list = halaman(&ctx, &panitia_magang, &query).await;
         assert_eq!(sorted(ids(&list)), sorted(expected.clone()), "{query}");
         assert_eq!(list["total"], expected.len(), "{query}");
         assert_eq!(list["total_pages"], 1, "{query}");
     }
 
     // Without a filter everything is there.
-    let list = halaman(&ctx, &tim_mb, "").await;
+    let list = halaman(&ctx, &panitia_magang, "").await;
     assert_eq!(list["total"], 3);
 }
 
 #[sqlx::test]
 async fn filters_sent_together_must_all_match(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let pos = ctx.posisi_filter().await;
 
     let a = ctx.pendaftaran_di("a", pos.a, LOLOS).await;
@@ -2919,23 +3069,23 @@ async fn filters_sent_together_must_all_match(db: PgPool) {
         "?periode={}&perusahaan={}",
         pos.id_periode_ab, pos.id_perusahaan_ac
     );
-    let list = halaman(&ctx, &tim_mb, &query).await;
+    let list = halaman(&ctx, &panitia_magang, &query).await;
     assert_eq!(sorted(ids(&list)), sorted(vec![a, a_lain]));
 
     let query = format!(
         "?periode={}&status={lolos}&perusahaan={}",
         pos.id_periode_ab, pos.id_perusahaan_ac
     );
-    let list = halaman(&ctx, &tim_mb, &query).await;
+    let list = halaman(&ctx, &panitia_magang, &query).await;
     assert_eq!(ids(&list), [a]);
     assert_eq!(list["total"], 1);
 
     let query = format!("?posisi={}&status={lolos}", pos.a);
-    let list = halaman(&ctx, &tim_mb, &query).await;
+    let list = halaman(&ctx, &panitia_magang, &query).await;
     assert_eq!(ids(&list), [a]);
 
     let query = format!("?posisi={}&perusahaan={}", pos.a, pos.id_perusahaan_b);
-    let list = halaman(&ctx, &tim_mb, &query).await;
+    let list = halaman(&ctx, &panitia_magang, &query).await;
     assert_eq!(list["total"], 0);
 
     // A period and a company with nothing in common.
@@ -2943,7 +3093,7 @@ async fn filters_sent_together_must_all_match(db: PgPool) {
         "?periode={}&perusahaan={}",
         pos.id_periode_c, pos.id_perusahaan_b
     );
-    let list = halaman(&ctx, &tim_mb, &query).await;
+    let list = halaman(&ctx, &panitia_magang, &query).await;
     assert_eq!(list["data"], serde_json::json!([]));
     assert_eq!(list["total"], 0);
     assert_eq!(list["total_pages"], 0);
@@ -2952,7 +3102,7 @@ async fn filters_sent_together_must_all_match(db: PgPool) {
 #[sqlx::test]
 async fn pages_split_the_filtered_list(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let lolos = ctx.id_status(LOLOS).await;
 
     let created = ctx.banyak_pendaftaran(5).await;
@@ -2960,11 +3110,11 @@ async fn pages_split_the_filtered_list(db: PgPool) {
     ctx.set_status(created[3], "Diterima").await;
     // Left with created[4], [2] and [0], newest first.
 
-    let first = halaman(&ctx, &tim_mb, &format!("?status={lolos}&p=1&r=2")).await;
+    let first = halaman(&ctx, &panitia_magang, &format!("?status={lolos}&p=1&r=2")).await;
     assert_eq!(ids(&first), [created[4], created[2]]);
     assert_eq!(info_halaman(&first), (1, 2, 3, 2));
 
-    let second = halaman(&ctx, &tim_mb, &format!("?status={lolos}&p=2&r=2")).await;
+    let second = halaman(&ctx, &panitia_magang, &format!("?status={lolos}&p=2&r=2")).await;
     assert_eq!(ids(&second), [created[0]]);
     assert_eq!(info_halaman(&second), (2, 2, 3, 2));
 }
@@ -2972,11 +3122,11 @@ async fn pages_split_the_filtered_list(db: PgPool) {
 #[sqlx::test]
 async fn filters_use_the_default_page_too(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let lolos = ctx.id_status(LOLOS).await;
     ctx.banyak_pendaftaran(27).await;
 
-    let list = halaman(&ctx, &tim_mb, &format!("?status={lolos}")).await;
+    let list = halaman(&ctx, &panitia_magang, &format!("?status={lolos}")).await;
     assert_eq!(ids(&list).len(), 25);
     assert_eq!(info_halaman(&list), (1, 25, 27, 2));
 }
@@ -2984,7 +3134,7 @@ async fn filters_use_the_default_page_too(db: PgPool) {
 #[sqlx::test]
 async fn filtering_on_an_unknown_id_finds_nothing(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     ctx.banyak_pendaftaran(2).await;
 
     for query in [
@@ -2995,7 +3145,7 @@ async fn filtering_on_an_unknown_id_finds_nothing(db: PgPool) {
         "?status=0",
         "?periode=-1",
     ] {
-        let list = halaman(&ctx, &tim_mb, query).await;
+        let list = halaman(&ctx, &panitia_magang, query).await;
         assert_eq!(list["data"], serde_json::json!([]), "{query}");
         assert_eq!(list["total"], 0, "{query}");
     }
@@ -3033,11 +3183,16 @@ async fn a_mahasiswa_cannot_reach_others_through_a_filter(db: PgPool) {
 #[sqlx::test]
 async fn looking_up_one_pendaftaran_ignores_the_list_limits(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let created = ctx.banyak_pendaftaran(27).await;
 
     // The oldest one is not on the first page, but its detail is still there.
-    let response = get(&ctx.app, Some(&tim_mb), &format!("{URI}/{}", created[0])).await;
+    let response = get(
+        &ctx.app,
+        Some(&panitia_magang),
+        &format!("{URI}/{}", created[0]),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(json_body(response).await["id_pendaftaran"], created[0]);
 }
@@ -3062,7 +3217,7 @@ impl Ctx {
 #[sqlx::test]
 async fn searching_finds_any_part_of_the_name_in_any_case(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let budi = ctx.pendaftaran_bernama("Budi Santoso").await;
     let abu = ctx.pendaftaran_bernama("Abu Budiman").await;
     let siti = ctx.pendaftaran_bernama("Siti Aminah").await;
@@ -3079,7 +3234,7 @@ async fn searching_finds_any_part_of_the_name_in_any_case(db: PgPool) {
         ("?s=tidak-ada", vec![]),
     ];
     for (query, expected) in cases {
-        let list = halaman(&ctx, &tim_mb, query).await;
+        let list = halaman(&ctx, &panitia_magang, query).await;
         assert_eq!(sorted(ids(&list)), sorted(expected.clone()), "{query}");
         assert_eq!(list["total"], expected.len(), "{query}");
     }
@@ -3088,12 +3243,12 @@ async fn searching_finds_any_part_of_the_name_in_any_case(db: PgPool) {
 #[sqlx::test]
 async fn an_empty_search_is_ignored(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     ctx.pendaftaran_bernama("Budi").await;
     ctx.pendaftaran_bernama("Siti").await;
 
     for query in ["?s=", "?s=%20%20", "?s=+"] {
-        let list = halaman(&ctx, &tim_mb, query).await;
+        let list = halaman(&ctx, &panitia_magang, query).await;
         assert_eq!(list["total"], 2, "{query}");
     }
 }
@@ -3101,17 +3256,17 @@ async fn an_empty_search_is_ignored(db: PgPool) {
 #[sqlx::test]
 async fn searching_treats_every_character_literally(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let persen = ctx.pendaftaran_bernama("Bu%di").await;
     let garis = ctx.pendaftaran_bernama("Bu_di").await;
     ctx.pendaftaran_bernama("Budi").await;
 
-    let list = halaman(&ctx, &tim_mb, "?s=%25").await;
+    let list = halaman(&ctx, &panitia_magang, "?s=%25").await;
     assert_eq!(ids(&list), [persen]);
-    let list = halaman(&ctx, &tim_mb, "?s=_").await;
+    let list = halaman(&ctx, &panitia_magang, "?s=_").await;
     assert_eq!(ids(&list), [garis]);
 
-    let list = halaman(&ctx, &tim_mb, "?s=%27%20OR%201%3D1%20--").await;
+    let list = halaman(&ctx, &panitia_magang, "?s=%27%20OR%201%3D1%20--").await;
     assert_eq!(list["total"], 0);
     assert_eq!(ctx.count("pendaftaran").await, 3);
 }
@@ -3119,7 +3274,7 @@ async fn searching_treats_every_character_literally(db: PgPool) {
 #[sqlx::test]
 async fn searching_works_with_filters_and_pages(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let lolos = ctx.id_status(LOLOS).await;
 
     let a = ctx.pendaftaran_bernama("Budi Satu").await;
@@ -3128,13 +3283,13 @@ async fn searching_works_with_filters_and_pages(db: PgPool) {
     ctx.pendaftaran_bernama("Siti Empat").await;
     ctx.set_status(c, "Diterima").await;
 
-    let list = halaman(&ctx, &tim_mb, &format!("?s=budi&status={lolos}")).await;
+    let list = halaman(&ctx, &panitia_magang, &format!("?s=budi&status={lolos}")).await;
     assert_eq!(sorted(ids(&list)), sorted(vec![a, b]));
     assert_eq!(list["total"], 2);
 
-    let first = halaman(&ctx, &tim_mb, "?s=budi&p=1&r=2").await;
+    let first = halaman(&ctx, &panitia_magang, "?s=budi&p=1&r=2").await;
     assert_eq!(info_halaman(&first), (1, 2, 3, 2));
-    let second = halaman(&ctx, &tim_mb, "?s=budi&p=2&r=2").await;
+    let second = halaman(&ctx, &panitia_magang, "?s=budi&p=2&r=2").await;
     assert_eq!(info_halaman(&second), (2, 2, 3, 2));
 
     let mut semua = ids(&first);
@@ -3158,17 +3313,17 @@ async fn a_mahasiswa_only_searches_their_own(db: PgPool) {
 #[sqlx::test]
 async fn a_pendaftaran_without_a_name_is_not_found_by_searching(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let id = ctx.pendaftaran_bernama("Budi").await;
     sqlx::query("UPDATE mahasiswa SET nama = NULL")
         .execute(&ctx.db)
         .await
         .unwrap();
 
-    let list = halaman(&ctx, &tim_mb, "?s=budi").await;
+    let list = halaman(&ctx, &panitia_magang, "?s=budi").await;
     assert_eq!(list["total"], 0);
 
-    let list = halaman(&ctx, &tim_mb, "").await;
+    let list = halaman(&ctx, &panitia_magang, "").await;
     assert_eq!(ids(&list), [id]);
 }
 
@@ -3223,7 +3378,7 @@ impl Ctx {
 #[sqlx::test]
 async fn saves_the_same_dpm_on_every_pendaftaran_listed(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, cookie_a) = ctx.pendaftaran_baru("a", "Aktif").await;
     let (b, _) = ctx.pendaftaran_baru("b", "Aktif").await;
     let (c, _) = ctx.pendaftaran_baru("c", "Aktif").await;
@@ -3235,7 +3390,7 @@ async fn saves_the_same_dpm_on_every_pendaftaran_listed(db: PgPool) {
             .await
             .unwrap();
 
-    let response = put_plot(&ctx.app, Some(&tim_mb), plot_body(&[c, a, b])).await;
+    let response = put_plot(&ctx.app, Some(&panitia_magang), plot_body(&[c, a, b])).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         json_body(response).await,
@@ -3251,8 +3406,8 @@ async fn saves_the_same_dpm_on_every_pendaftaran_listed(db: PgPool) {
     }
     assert_eq!(ctx.plotting_of(bukan).await, None);
 
-    // The owner and Tim MB both see it, in the detail and as a flag in the list.
-    for cookie in [&cookie_a, &tim_mb] {
+    // The owner and Panitia Magang both see it, in the detail and as a flag in the list.
+    for cookie in [&cookie_a, &panitia_magang] {
         let response = get(&ctx.app, Some(cookie), &format!("{URI}/{a}")).await;
         assert_eq!(
             json_body(response).await["plotting_dpm"],
@@ -3280,11 +3435,11 @@ async fn saves_the_same_dpm_on_every_pendaftaran_listed(db: PgPool) {
 #[sqlx::test]
 async fn plotting_again_replaces_the_dpm(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (lama, _) = ctx.pendaftaran_baru("a", "Aktif").await;
     let (baru, _) = ctx.pendaftaran_baru("b", "Aktif").await;
 
-    let response = put_plot(&ctx.app, Some(&tim_mb), plot_body(&[lama])).await;
+    let response = put_plot(&ctx.app, Some(&panitia_magang), plot_body(&[lama])).await;
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = serde_json::json!({
@@ -3292,7 +3447,7 @@ async fn plotting_again_replaces_the_dpm(db: PgPool) {
         "nama_dpm": "Dr. Siti",
         "kontak_dpm": "081234567890",
     });
-    let response = put_plot(&ctx.app, Some(&tim_mb), body).await;
+    let response = put_plot(&ctx.app, Some(&panitia_magang), body).await;
     assert_eq!(response.status(), StatusCode::OK);
 
     let expected = Some(("Dr. Siti".to_string(), "081234567890".to_string()));
@@ -3304,10 +3459,10 @@ async fn plotting_again_replaces_the_dpm(db: PgPool) {
 #[sqlx::test]
 async fn plotting_an_id_listed_twice_counts_once(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", "Aktif").await;
 
-    let response = put_plot(&ctx.app, Some(&tim_mb), plot_body(&[a, a, a])).await;
+    let response = put_plot(&ctx.app, Some(&panitia_magang), plot_body(&[a, a, a])).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         json_body(response).await["id_pendaftaran"],
@@ -3319,7 +3474,7 @@ async fn plotting_an_id_listed_twice_counts_once(db: PgPool) {
 #[sqlx::test]
 async fn one_pendaftaran_not_aktif_stops_the_whole_plotting(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
 
     for status in STATUSES.into_iter().filter(|s| *s != "Aktif") {
         let nama = status.replace(['/', ' '], ".");
@@ -3327,7 +3482,7 @@ async fn one_pendaftaran_not_aktif_stops_the_whole_plotting(db: PgPool) {
         let (aktif, _) = ctx.pendaftaran_baru(&format!("{nama}.b"), "Aktif").await;
         let (lain, _) = ctx.pendaftaran_baru(&format!("{nama}.c"), status).await;
 
-        let response = put_plot(&ctx.app, Some(&tim_mb), plot_body(&[punya])).await;
+        let response = put_plot(&ctx.app, Some(&panitia_magang), plot_body(&[punya])).await;
         assert_eq!(response.status(), StatusCode::OK);
         let before = ctx.snapshot(punya).await;
 
@@ -3336,7 +3491,7 @@ async fn one_pendaftaran_not_aktif_stops_the_whole_plotting(db: PgPool) {
             "nama_dpm": "Dr. Siti",
             "kontak_dpm": "siti@ub.ac.id",
         });
-        let response = put_plot(&ctx.app, Some(&tim_mb), body).await;
+        let response = put_plot(&ctx.app, Some(&panitia_magang), body).await;
         assert_rejected(response, StatusCode::CONFLICT, BUKAN_AKTIF).await;
 
         assert_eq!(ctx.plotting_of(punya).await, plot_awal(), "{status}");
@@ -3349,10 +3504,10 @@ async fn one_pendaftaran_not_aktif_stops_the_whole_plotting(db: PgPool) {
 #[sqlx::test]
 async fn one_missing_pendaftaran_stops_the_whole_plotting(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", "Aktif").await;
 
-    let response = put_plot(&ctx.app, Some(&tim_mb), plot_body(&[a, 999_999])).await;
+    let response = put_plot(&ctx.app, Some(&panitia_magang), plot_body(&[a, 999_999])).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(ctx.plotting_of(a).await, None);
 }
@@ -3360,7 +3515,7 @@ async fn one_missing_pendaftaran_stops_the_whole_plotting(db: PgPool) {
 #[sqlx::test]
 async fn rejects_bad_plotting_without_saving(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", "Aktif").await;
     let before = ctx.snapshot(a).await;
     let nama_salah = "Nama DPM harus berisi 1-255 karakter.";
@@ -3386,7 +3541,7 @@ async fn rejects_bad_plotting_without_saving(db: PgPool) {
     for (field, value, message) in cases {
         let mut body = plot_body(&[a]);
         body[field] = value;
-        let response = put_plot(&ctx.app, Some(&tim_mb), body).await;
+        let response = put_plot(&ctx.app, Some(&panitia_magang), body).await;
         assert_rejected(response, StatusCode::UNPROCESSABLE_ENTITY, message).await;
     }
 
@@ -3394,7 +3549,7 @@ async fn rejects_bad_plotting_without_saving(db: PgPool) {
     for field in ["id_pendaftaran", "nama_dpm", "kontak_dpm"] {
         let mut body = plot_body(&[a]);
         body.as_object_mut().unwrap().remove(field);
-        let response = put_plot(&ctx.app, Some(&tim_mb), body).await;
+        let response = put_plot(&ctx.app, Some(&panitia_magang), body).await;
         assert_eq!(
             response.status(),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -3406,20 +3561,20 @@ async fn rejects_bad_plotting_without_saving(db: PgPool) {
     let mut satu_id = plot_body(&[a]);
     satu_id["id_pendaftaran"] = serde_json::json!(a);
     for body in [extra, satu_id] {
-        let response = put_plot(&ctx.app, Some(&tim_mb), body).await;
+        let response = put_plot(&ctx.app, Some(&panitia_magang), body).await;
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     let response = put_plot_raw(
         &ctx.app,
-        Some(&tim_mb),
+        Some(&panitia_magang),
         Some("application/json"),
         "{".to_string(),
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let body = plot_body(&[a]).to_string();
-    let response = put_plot_raw(&ctx.app, Some(&tim_mb), None, body).await;
+    let response = put_plot_raw(&ctx.app, Some(&panitia_magang), None, body).await;
     assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
 
     assert_eq!(ctx.plotting_of(a).await, None);
@@ -3429,7 +3584,7 @@ async fn rejects_bad_plotting_without_saving(db: PgPool) {
 #[sqlx::test]
 async fn plotting_trims_and_accepts_the_longest_values(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", "Aktif").await;
     let panjang = "é".repeat(255);
 
@@ -3438,7 +3593,7 @@ async fn plotting_trims_and_accepts_the_longest_values(db: PgPool) {
         "nama_dpm": format!("  {panjang}  "),
         "kontak_dpm": format!(" {panjang} "),
     });
-    let response = put_plot(&ctx.app, Some(&tim_mb), body).await;
+    let response = put_plot(&ctx.app, Some(&panitia_magang), body).await;
     assert_eq!(response.status(), StatusCode::OK);
     let saved = json_body(response).await;
     assert_eq!(saved["nama_dpm"], panjang.as_str());
@@ -3449,7 +3604,7 @@ async fn plotting_trims_and_accepts_the_longest_values(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_save_a_plotting(db: PgPool) {
+async fn only_panitia_magang_can_save_a_plotting(db: PgPool) {
     let ctx = setup(db);
     let (a, owner) = ctx.pendaftaran_baru("a", "Aktif").await;
     let (_, other) = ctx.mahasiswa("b@student.ub.ac.id").await;
@@ -3473,7 +3628,7 @@ async fn only_tim_mb_can_save_a_plotting(db: PgPool) {
 #[sqlx::test]
 async fn overlapping_plottings_end_with_one_dpm_for_all(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx.pendaftaran_baru("a", "Aktif").await;
     let (b, _) = ctx.pendaftaran_baru("b", "Aktif").await;
 
@@ -3485,8 +3640,8 @@ async fn overlapping_plottings_end_with_one_dpm_for_all(db: PgPool) {
         })
     };
     let (first, second) = tokio::join!(
-        put_plot(&ctx.app, Some(&tim_mb), isi([a, b], "Satu")),
-        put_plot(&ctx.app, Some(&tim_mb), isi([b, a], "Dua")),
+        put_plot(&ctx.app, Some(&panitia_magang), isi([a, b], "Satu")),
+        put_plot(&ctx.app, Some(&panitia_magang), isi([b, a], "Dua")),
     );
 
     assert_eq!(first.status(), StatusCode::OK);
@@ -3498,16 +3653,16 @@ async fn overlapping_plottings_end_with_one_dpm_for_all(db: PgPool) {
 #[sqlx::test]
 async fn plotting_sees_a_status_changed_while_it_waited(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
 
     let (a, _) = ctx.pendaftaran_baru("a", "Aktif").await;
-    let request = put_plot(&ctx.app, Some(&tim_mb), plot_body(&[a]));
+    let request = put_plot(&ctx.app, Some(&panitia_magang), plot_body(&[a]));
     let response = ctx.while_status_changes_to(a, "Selesai", request).await;
     assert_rejected(response, StatusCode::CONFLICT, BUKAN_AKTIF).await;
     assert_eq!(ctx.plotting_of(a).await, None);
 
     let (b, _) = ctx.pendaftaran_baru("b", "Diterima").await;
-    let request = put_plot(&ctx.app, Some(&tim_mb), plot_body(&[b]));
+    let request = put_plot(&ctx.app, Some(&panitia_magang), plot_body(&[b]));
     let response = ctx.while_status_changes_to(b, "Aktif", request).await;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(ctx.plotting_of(b).await, plot_awal());
@@ -3516,9 +3671,9 @@ async fn plotting_sees_a_status_changed_while_it_waited(db: PgPool) {
 #[sqlx::test]
 async fn the_route_does_not_get_in_the_way_of_the_detail(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
 
-    let response = get(&ctx.app, Some(&tim_mb), PLOT_URI).await;
+    let response = get(&ctx.app, Some(&panitia_magang), PLOT_URI).await;
     assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
@@ -3600,9 +3755,9 @@ impl Ctx {
 }
 
 #[sqlx::test]
-async fn tim_mb_exports_the_picked_pendaftaran_as_xlsx(db: PgPool) {
+async fn panitia_magang_exports_the_picked_pendaftaran_as_xlsx(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (a, _) = ctx
         .pendaftaran_baru("a", "Lolos Seleksi Administrasi")
         .await;
@@ -3637,7 +3792,7 @@ async fn tim_mb_exports_the_picked_pendaftaran_as_xlsx(db: PgPool) {
     let before = ctx.snapshot(a).await;
 
     let body = serde_json::json!({ "format": "xlsx", "id_pendaftaran": [a, b, a] });
-    let response = post_ekspor(&ctx.app, Some(&tim_mb), body).await;
+    let response = post_ekspor(&ctx.app, Some(&panitia_magang), body).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     let headers = response.headers();
@@ -3779,12 +3934,12 @@ async fn a_public_link_that_is_changed_expired_or_foreign_finds_nothing(db: PgPo
 #[sqlx::test]
 async fn rejects_bad_export_requests(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (id, _) = ctx.pendaftaran_baru("a", "Aktif").await;
 
     let response = post_ekspor(
         &ctx.app,
-        Some(&tim_mb),
+        Some(&panitia_magang),
         serde_json::json!({ "format": "xlsx", "id_pendaftaran": [] }),
     )
     .await;
@@ -3798,7 +3953,7 @@ async fn rejects_bad_export_requests(db: PgPool) {
     let terlalu_banyak: Vec<i32> = (1..=10_001).collect();
     let response = post_ekspor(
         &ctx.app,
-        Some(&tim_mb),
+        Some(&panitia_magang),
         serde_json::json!({ "format": "xlsx", "id_pendaftaran": terlalu_banyak }),
     )
     .await;
@@ -3812,7 +3967,7 @@ async fn rejects_bad_export_requests(db: PgPool) {
     // One unknown id fails the whole export.
     let response = post_ekspor(
         &ctx.app,
-        Some(&tim_mb),
+        Some(&panitia_magang),
         serde_json::json!({ "format": "xlsx", "id_pendaftaran": [id, 9999] }),
     )
     .await;
@@ -3824,7 +3979,7 @@ async fn rejects_bad_export_requests(db: PgPool) {
         serde_json::json!({ "format": "xlsx", "id_pendaftaran": [id], "lain": 1 }),
         serde_json::json!({ "format": "xlsx", "id_pendaftaran": ["1"] }),
     ] {
-        let response = post_ekspor(&ctx.app, Some(&tim_mb), body.clone()).await;
+        let response = post_ekspor(&ctx.app, Some(&panitia_magang), body.clone()).await;
         assert_eq!(
             response.status(),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -3834,7 +3989,7 @@ async fn rejects_bad_export_requests(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_export(db: PgPool) {
+async fn only_panitia_magang_can_export(db: PgPool) {
     let ctx = setup(db);
     let (id, cookie) = ctx.pendaftaran_baru("a", "Aktif").await;
     let body = serde_json::json!({ "format": "xlsx", "id_pendaftaran": [id] });
@@ -3875,7 +4030,7 @@ async fn rejects_a_position_of_a_hidden_company(db: PgPool) {
 #[sqlx::test]
 async fn a_hidden_position_takes_no_new_pendaftaran_but_keeps_the_old_ones(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let (_, lama) = ctx.mahasiswa("lama@student.ub.ac.id").await;
     let (_, baru) = ctx.mahasiswa("baru@student.ub.ac.id").await;
     let id_posisi = ctx.posisi_berjalan(5).await;
@@ -3896,8 +4051,8 @@ async fn a_hidden_position_takes_no_new_pendaftaran_but_keeps_the_old_ones(db: P
     .await;
 
     // The pendaftaran made before can still be seen and processed.
-    let list = json_body(get(&ctx.app, Some(&tim_mb), URI).await).await;
+    let list = json_body(get(&ctx.app, Some(&panitia_magang), URI).await).await;
     assert_eq!(ids(&list), [id]);
-    let response = ubah_status(&ctx.app, &tim_mb, id, LOLOS).await;
+    let response = ubah_status(&ctx.app, &panitia_magang, id, LOLOS).await;
     assert_eq!(response.status(), StatusCode::OK);
 }

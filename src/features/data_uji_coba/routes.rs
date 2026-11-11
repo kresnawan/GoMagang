@@ -5,7 +5,7 @@ use axum::{
 };
 
 use super::handler;
-use crate::{features::tim_mb::require_admin_secret, state::AppState};
+use crate::{features::panitia_magang::require_admin_secret, state::AppState};
 
 /// The routes only exist when `ADMIN_SECRET` is set.
 pub fn routes(state: &AppState) -> Router<AppState> {

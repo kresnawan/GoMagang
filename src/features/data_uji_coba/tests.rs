@@ -77,23 +77,23 @@ impl Ctx {
         }
     }
 
-    async fn tim_mb(&self) -> User {
+    async fn panitia_magang(&self) -> User {
         let id_pengguna = sqlx::query_scalar(
             "INSERT INTO pengguna (email, google_sub)
-             VALUES ('tim@gmail.com', 'tim')
+             VALUES ('panitia@gmail.com', 'tim')
              RETURNING id_pengguna",
         )
         .fetch_one(&self.db)
         .await
         .unwrap();
-        sqlx::query("INSERT INTO tim_mb (id_pengguna) VALUES ($1)")
+        sqlx::query("INSERT INTO panitia_magang (id_pengguna) VALUES ($1)")
             .bind(id_pengguna)
             .execute(&self.db)
             .await
             .unwrap();
         User {
             id_pengguna,
-            email: "tim@gmail.com".to_string(),
+            email: "panitia@gmail.com".to_string(),
         }
     }
 
@@ -123,14 +123,14 @@ impl Ctx {
     }
 
     /// A pendaftaran with its files on disk, a row in every table hanging off it, and a log row
-    /// written by Tim MB if one is given. The berkas is named `{prefix}.pdf` and the surat
+    /// written by Panitia Magang if one is given. The berkas is named `{prefix}.pdf` and the surat
     /// keterangan `{prefix}-surat.pdf`.
     async fn pendaftaran(
         &self,
         user: &User,
         id_posisi: i32,
         prefix: &str,
-        tim_mb: Option<i32>,
+        panitia_magang: Option<i32>,
     ) -> i32 {
         let id: i32 = sqlx::query_scalar(
             "INSERT INTO pendaftaran (id_posisi, id_status, id_pengguna)
@@ -174,7 +174,7 @@ impl Ctx {
         )
         .bind(id)
         .bind(format!("{prefix}.pdf"))
-        .bind(tim_mb)
+        .bind(panitia_magang)
         .bind(format!("{prefix}-surat.pdf"))
         .execute(&self.db)
         .await
@@ -247,6 +247,7 @@ fn setup_with(db: PgPool, admin_secret: Option<&str>) -> Ctx {
         cookie_secure: false,
         upload_dir: uploads,
         surat_signing_key: None,
+        smtp: None,
     };
     let state = AppState::new(&config, db.clone());
     Ctx {
@@ -348,20 +349,25 @@ impl Ctx {
 #[sqlx::test]
 async fn deleting_removes_every_mahasiswa_and_all_that_belongs_to_them(db: PgPool) {
     let ctx = setup(db);
-    let tim_mb = ctx.tim_mb().await;
+    let panitia_magang = ctx.panitia_magang().await;
     let target = ctx.mahasiswa(TARGET).await;
     let other = ctx.mahasiswa(OTHER).await;
     let id_posisi = ctx.posisi(5).await;
 
     let first = ctx
-        .pendaftaran(&target, id_posisi, "target-1", Some(tim_mb.id_pengguna))
+        .pendaftaran(
+            &target,
+            id_posisi,
+            "target-1",
+            Some(panitia_magang.id_pengguna),
+        )
         .await;
     let second = ctx.posisi(5).await;
     let second = ctx.pendaftaran(&target, second, "target-2", None).await;
     let theirs = ctx.pendaftaran(&other, id_posisi, "other", None).await;
     ctx.insert_refresh_token(&target, b"target").await;
     ctx.insert_refresh_token(&other, b"other").await;
-    ctx.insert_refresh_token(&tim_mb, b"tim").await;
+    ctx.insert_refresh_token(&panitia_magang, b"tim").await;
 
     assert!(ctx.rows_of(target.id_pengguna, first).await > 0);
 
@@ -403,9 +409,9 @@ async fn deleting_removes_every_mahasiswa_and_all_that_belongs_to_them(db: PgPoo
         assert!(!ctx.has_file(file), "{file}");
     }
 
-    // What is not a mahasiswa's stays, and Tim MB keeps their account and login.
+    // What is not a mahasiswa's stays, and Panitia Magang keeps their account and login.
     assert_eq!(ctx.count("pengguna").await, 1);
-    assert_eq!(ctx.count("tim_mb").await, 1);
+    assert_eq!(ctx.count("panitia_magang").await, 1);
     assert_eq!(ctx.count("token_refresh").await, 1);
     assert_eq!(ctx.count("posisi_magang").await, 2);
     assert_eq!(ctx.count("periode_pendaftaran").await, 2);
@@ -436,7 +442,7 @@ async fn deleting_leaves_the_positions_and_their_quota_alone(db: PgPool) {
 #[sqlx::test]
 async fn deleting_with_nobody_left_changes_nothing(db: PgPool) {
     let ctx = setup(db);
-    ctx.tim_mb().await;
+    ctx.panitia_magang().await;
 
     let response = hapus(&ctx).await;
     assert_eq!(response.status(), StatusCode::OK);
@@ -449,7 +455,7 @@ async fn deleting_with_nobody_left_changes_nothing(db: PgPool) {
             "jumlah_berkas_gagal": 0,
         })
     );
-    assert_eq!(ctx.count("tim_mb").await, 1);
+    assert_eq!(ctx.count("panitia_magang").await, 1);
 }
 
 #[sqlx::test]
@@ -472,8 +478,8 @@ async fn both_routes_need_the_admin_secret(db: PgPool) {
     let ctx = setup(db);
     let target = ctx.mahasiswa(TARGET).await;
     let cookie = ctx.cookie(&target);
-    let tim_mb = ctx.tim_mb().await;
-    let tim_mb = ctx.cookie(&tim_mb);
+    let panitia_magang = ctx.panitia_magang().await;
+    let panitia_magang = ctx.cookie(&panitia_magang);
     ctx.posisi(5).await;
     let pengguna = ctx.count("pengguna").await;
 
@@ -482,8 +488,8 @@ async fn both_routes_need_the_admin_secret(db: PgPool) {
             let response = send(&ctx.app, method, uri, secret, None, Body::empty()).await;
             assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method}");
         }
-        // A login, even Tim MB's, is no substitute for the secret.
-        for cookie in [&cookie, &tim_mb] {
+        // A login, even Panitia Magang's, is no substitute for the secret.
+        for cookie in [&cookie, &panitia_magang] {
             let response = send(&ctx.app, method, uri, None, Some(cookie), Body::empty()).await;
             assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method}");
         }
@@ -541,8 +547,8 @@ async fn a_failed_delete_leaves_every_row_and_file_in_place(db: PgPool) {
     let id = ctx.pendaftaran(&target, id_posisi, "tetap", None).await;
     let rows = ctx.rows_of(target.id_pengguna, id).await;
 
-    // The tim_mb row refers to the pengguna row, so the very last delete fails.
-    sqlx::query("INSERT INTO tim_mb (id_pengguna) VALUES ($1)")
+    // The panitia_magang row refers to the pengguna row, so the very last delete fails.
+    sqlx::query("INSERT INTO panitia_magang (id_pengguna) VALUES ($1)")
         .bind(target.id_pengguna)
         .execute(&ctx.db)
         .await
@@ -768,14 +774,14 @@ async fn seeding_ignores_the_quota(db: PgPool) {
 async fn seeded_data_works_like_real_data(db: PgPool) {
     let ctx = setup(db);
     ctx.posisi(5).await;
-    let tim_mb = ctx.tim_mb().await;
-    let tim_mb = ctx.cookie(&tim_mb);
+    let panitia_magang = ctx.panitia_magang().await;
+    let panitia_magang = ctx.cookie(&panitia_magang);
     assert_eq!(seed(&ctx).await.status(), StatusCode::CREATED);
     let user = ctx.seeded_user().await;
     let cookie = ctx.cookie(&user);
 
-    // Tim MB sees all of them in the list and the detail.
-    let list = json_body(get(&ctx, &tim_mb, "/api/v1/pendaftaran?r=50").await).await;
+    // Panitia Magang sees all of them in the list and the detail.
+    let list = json_body(get(&ctx, &panitia_magang, "/api/v1/pendaftaran?r=50").await).await;
     let list = list["data"].as_array().unwrap();
     assert_eq!(list.len(), 50);
     let id = list[0]["id_pendaftaran"].as_i64().unwrap();
@@ -783,17 +789,17 @@ async fn seeded_data_works_like_real_data(db: PgPool) {
     assert_eq!(list[0]["ada_jadwal_seleksi"], false);
 
     let uri = format!("/api/v1/pendaftaran/{id}");
-    let response = get(&ctx, &tim_mb, &uri).await;
+    let response = get(&ctx, &panitia_magang, &uri).await;
     assert_eq!(response.status(), StatusCode::OK);
     let detail = json_body(response).await;
     assert_eq!(detail["log"].as_array().unwrap().len(), 1);
     let berkas = detail["berkas"].as_array().unwrap();
     assert!((2..=5).contains(&berkas.len()), "{}", berkas.len());
 
-    // Every file can be downloaded, by Tim MB and by its owner.
+    // Every file can be downloaded, by Panitia Magang and by its owner.
     for item in berkas {
         let uri = format!("/api/v1/berkas/{}", item["id_berkas"]);
-        let response = get(&ctx, &tim_mb, &uri).await;
+        let response = get(&ctx, &panitia_magang, &uri).await;
         assert_eq!(response.status(), StatusCode::OK, "{item}");
         assert_eq!(response.headers()[header::CONTENT_TYPE], "application/pdf");
         let isi = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -818,13 +824,13 @@ async fn seeded_data_works_like_real_data(db: PgPool) {
     .await;
     assert_eq!(response.status(), StatusCode::OK);
 
-    // Tim MB can process them.
+    // Panitia Magang can process them.
     let response = send(
         &ctx.app,
         "PATCH",
         &format!("/api/v1/pendaftaran?id={id}"),
         None,
-        Some(&tim_mb),
+        Some(&panitia_magang),
         Body::from(r#"{ "status": "Lolos Seleksi Administrasi" }"#),
     )
     .await;

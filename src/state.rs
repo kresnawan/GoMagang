@@ -4,6 +4,7 @@ use sqlx::PgPool;
 
 use crate::{
     config::Config,
+    email::PengirimEmail,
     features::{
         auth::{GoogleClient, SessionManager},
         pendaftaran::TautanBerkas,
@@ -23,6 +24,7 @@ pub struct AppState {
     pub upload_dir: Arc<Path>,
     pub penanda_surat: Option<Arc<PenandaSurat>>,
     pub tautan_berkas: Arc<TautanBerkas>,
+    pub email: Arc<PengirimEmail>,
 }
 
 impl AppState {
@@ -40,6 +42,7 @@ impl AppState {
                 .as_deref()
                 .map(|key| Arc::new(PenandaSurat::from_base64_seed(key))),
             tautan_berkas: Arc::new(TautanBerkas::new(&config.jwt_secret)),
+            email: Arc::new(PengirimEmail::new(config.smtp.as_ref())),
         }
     }
 }

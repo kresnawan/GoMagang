@@ -1,7 +1,7 @@
 use axum::{Json, extract::State, http::StatusCode};
 
 use super::{
-    model::{RegisterTimMb, TimMb},
+    model::{PanitiaMagang, RegisterPanitiaMagang},
     repository,
 };
 use crate::{error::AppError, state::AppState};
@@ -10,8 +10,8 @@ const EMAIL_TAKEN: &str = "Email sudah terdaftar.";
 
 pub async fn register(
     State(state): State<AppState>,
-    Json(data): Json<RegisterTimMb>,
-) -> Result<(StatusCode, Json<TimMb>), AppError> {
+    Json(data): Json<RegisterPanitiaMagang>,
+) -> Result<(StatusCode, Json<PanitiaMagang>), AppError> {
     let data = data.validate()?;
 
     let id_pengguna = repository::register(&state.db, &data)
@@ -25,7 +25,7 @@ pub async fn register(
 
     Ok((
         StatusCode::CREATED,
-        Json(TimMb {
+        Json(PanitiaMagang {
             id_pengguna,
             email: data.email,
             nama: data.nama,

@@ -17,7 +17,7 @@ const GMAIL_DOMAIN: &str = "gmail.com";
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum AccountKind {
     Mahasiswa,
-    TimMb,
+    PanitiaMagang,
 }
 
 pub struct GoogleClient {
@@ -120,8 +120,8 @@ fn decode_claims(id_token: &str, client_id: &str) -> Result<GoogleClaims, AppErr
     }
 }
 
-// A gmail.com address only says who the account belongs to. Whether it's really Tim MB is
-// decided by the tim_mb table when the session starts.
+// A gmail.com address only says who the account belongs to. Whether it's really Panitia Magang is
+// decided by the panitia_magang table when the session starts.
 fn account_kind(claims: &GoogleClaims) -> Result<AccountKind, AppError> {
     if !claims.email_verified {
         return Err(AppError::Forbidden);
@@ -132,7 +132,7 @@ fn account_kind(claims: &GoogleClaims) -> Result<AccountKind, AppError> {
 
     match (domain, claims.hd.as_deref()) {
         (Some(STUDENT_DOMAIN), Some(STUDENT_DOMAIN)) => Ok(AccountKind::Mahasiswa),
-        (Some(GMAIL_DOMAIN), None) => Ok(AccountKind::TimMb),
+        (Some(GMAIL_DOMAIN), None) => Ok(AccountKind::PanitiaMagang),
         _ => Err(AppError::Forbidden),
     }
 }

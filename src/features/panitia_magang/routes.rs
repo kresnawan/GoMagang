@@ -10,6 +10,6 @@ pub fn routes(state: &AppState) -> Router<AppState> {
     }
 
     Router::new()
-        .route("/tim-mb", post(handler::register))
+        .route("/panitia-magang", post(handler::register))
         .route_layer(from_fn_with_state(state.clone(), require_admin_secret))
 }

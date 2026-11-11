@@ -26,6 +26,7 @@ fn config() -> Config {
         cookie_secure: false,
         upload_dir: Default::default(),
         surat_signing_key: None,
+        smtp: None,
     }
 }
 

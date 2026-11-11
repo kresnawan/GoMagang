@@ -24,6 +24,7 @@ fn setup(db: PgPool) -> (Router, AppState) {
         cookie_secure: false,
         upload_dir: Default::default(),
         surat_signing_key: None,
+        smtp: None,
     };
     let state = AppState::new(&config, db);
     (app::build(&config, state.clone()), state)
@@ -54,9 +55,9 @@ async fn mahasiswa_cookie(db: &PgPool, state: &AppState) -> String {
     cookie_for(state, &user)
 }
 
-async fn tim_mb_cookie(db: &PgPool, state: &AppState) -> String {
-    let user = insert_pengguna(db, "tim@gmail.com").await;
-    sqlx::query("INSERT INTO tim_mb (id_pengguna) VALUES ($1)")
+async fn panitia_magang_cookie(db: &PgPool, state: &AppState) -> String {
+    let user = insert_pengguna(db, "panitia@gmail.com").await;
+    sqlx::query("INSERT INTO panitia_magang (id_pengguna) VALUES ($1)")
         .bind(user.id_pengguna)
         .execute(db)
         .await
@@ -218,9 +219,9 @@ async fn mahasiswa_gets_nothing_when_no_period_is_running(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn tim_mb_defaults_to_the_running_period_and_can_pick_any(db: PgPool) {
+async fn panitia_magang_defaults_to_the_running_period_and_can_pick_any(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let periods = seed_periods(&db).await;
 
     assert_eq!(names(&app, URI, &cookie).await, ["Berjalan"]);
@@ -233,9 +234,9 @@ async fn tim_mb_defaults_to_the_running_period_and_can_pick_any(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn tim_mb_defaults_to_the_latest_period_when_none_is_running(db: PgPool) {
+async fn panitia_magang_defaults_to_the_latest_period_when_none_is_running(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let older = insert_periode(&db, "-30 days", "-20 days").await;
     let newer = insert_periode(&db, "-10 days", "-5 days").await;
     let company = insert_perusahaan(&db, "PT Satu").await;
@@ -248,7 +249,7 @@ async fn tim_mb_defaults_to_the_latest_period_when_none_is_running(db: PgPool) {
 #[sqlx::test]
 async fn returns_an_empty_list_when_there_are_no_periods(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
 
     assert!(names(&app, URI, &cookie).await.is_empty());
 }
@@ -380,9 +381,9 @@ fn new_posisi(id_perusahaan: i32, id_periode: i32) -> Value {
 }
 
 #[sqlx::test]
-async fn tim_mb_creates_a_position(db: PgPool) {
+async fn panitia_magang_creates_a_position(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let periode = insert_periode(&db, "-1 minute", "1 minute").await;
     let company = insert_perusahaan(&db, "PT Satu").await;
 
@@ -420,12 +421,12 @@ async fn tim_mb_creates_a_position(db: PgPool) {
 #[sqlx::test]
 async fn a_new_position_shows_up_for_mahasiswa_in_the_running_period(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let mahasiswa = mahasiswa_cookie(&db, &state).await;
     let periode = insert_periode(&db, "-1 minute", "1 minute").await;
     let company = insert_perusahaan(&db, "PT Satu").await;
 
-    let response = post_posisi(&app, Some(&tim_mb), new_posisi(company, periode)).await;
+    let response = post_posisi(&app, Some(&panitia_magang), new_posisi(company, periode)).await;
     assert_eq!(response.status(), StatusCode::CREATED);
 
     assert_eq!(names(&app, URI, &mahasiswa).await, ["Backend Developer"]);
@@ -434,7 +435,7 @@ async fn a_new_position_shows_up_for_mahasiswa_in_the_running_period(db: PgPool)
 #[sqlx::test]
 async fn positions_can_be_added_to_any_period(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let periods = seed_periods(&db).await;
     let company = insert_perusahaan(&db, "PT Baru").await;
 
@@ -447,7 +448,7 @@ async fn positions_can_be_added_to_any_period(db: PgPool) {
 #[sqlx::test]
 async fn rejects_invalid_values_without_saving(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let periode = insert_periode(&db, "-1 minute", "1 minute").await;
     let company = insert_perusahaan(&db, "PT Satu").await;
     let with = |field: &str, value: Value| {
@@ -498,7 +499,7 @@ async fn rejects_invalid_values_without_saving(db: PgPool) {
 #[sqlx::test]
 async fn reports_which_reference_was_not_found(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let periode = insert_periode(&db, "-1 minute", "1 minute").await;
     let company = insert_perusahaan(&db, "PT Satu").await;
 
@@ -515,7 +516,7 @@ async fn reports_which_reference_was_not_found(db: PgPool) {
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_create_positions(db: PgPool) {
+async fn only_panitia_magang_can_create_positions(db: PgPool) {
     let (app, state) = setup(db.clone());
     let periode = insert_periode(&db, "-1 minute", "1 minute").await;
     let company = insert_perusahaan(&db, "PT Satu").await;
@@ -550,7 +551,7 @@ async fn hide_perusahaan(db: &PgPool, id_perusahaan: i32) {
 async fn positions_of_a_hidden_company_are_left_out(db: PgPool) {
     let (app, state) = setup(db.clone());
     let mahasiswa = mahasiswa_cookie(&db, &state).await;
-    let tim_mb = tim_mb_cookie(&db, &state).await;
+    let panitia_magang = panitia_magang_cookie(&db, &state).await;
     let periode = insert_periode(&db, "-1 minute", "1 minute").await;
     let tetap = insert_perusahaan(&db, "PT Tetap").await;
     let hilang = insert_perusahaan(&db, "PT Hilang").await;
@@ -559,7 +560,7 @@ async fn positions_of_a_hidden_company_are_left_out(db: PgPool) {
 
     hide_perusahaan(&db, hilang).await;
 
-    for cookie in [&mahasiswa, &tim_mb] {
+    for cookie in [&mahasiswa, &panitia_magang] {
         assert_eq!(names(&app, URI, cookie).await, ["Backend"]);
         assert_eq!(
             names(&app, &format!("{URI}?p={hilang}"), cookie).await,
@@ -572,7 +573,7 @@ async fn positions_of_a_hidden_company_are_left_out(db: PgPool) {
 #[sqlx::test]
 async fn a_hidden_company_takes_no_new_positions(db: PgPool) {
     let (app, state) = setup(db.clone());
-    let cookie = tim_mb_cookie(&db, &state).await;
+    let cookie = panitia_magang_cookie(&db, &state).await;
     let periode = insert_periode(&db, "-1 minute", "1 minute").await;
     let company = insert_perusahaan(&db, "PT Satu").await;
     hide_perusahaan(&db, company).await;
@@ -638,12 +639,12 @@ async fn sembunyikan(app: &Router, cookie: Option<&str>, id: i32) -> Response<Bo
     send(app, "DELETE", &format!("{URI}/{id}"), cookie, None).await
 }
 
-/// One running position of PT Satu, with the cookies of a mahasiswa and of Tim MB.
+/// One running position of PT Satu, with the cookies of a mahasiswa and of Panitia Magang.
 struct Katalog {
     app: Router,
     db: PgPool,
     mahasiswa: String,
-    tim_mb: String,
+    panitia_magang: String,
     periode: i32,
     company: i32,
 }
@@ -652,7 +653,7 @@ async fn katalog(db: PgPool) -> Katalog {
     let (app, state) = setup(db.clone());
     Katalog {
         mahasiswa: mahasiswa_cookie(&db, &state).await,
-        tim_mb: tim_mb_cookie(&db, &state).await,
+        panitia_magang: panitia_magang_cookie(&db, &state).await,
         periode: insert_periode(&db, "-1 minute", "1 minute").await,
         company: insert_perusahaan(&db, "PT Satu").await,
         app,
@@ -679,11 +680,11 @@ impl Katalog {
 }
 
 #[sqlx::test]
-async fn tim_mb_changes_the_name_description_and_quota(db: PgPool) {
+async fn panitia_magang_changes_the_name_description_and_quota(db: PgPool) {
     let k = katalog(db).await;
     let id = k.posisi("Backend").await;
 
-    let response = ubah(&k.app, Some(&k.tim_mb), id, isi_baru()).await;
+    let response = ubah(&k.app, Some(&k.panitia_magang), id, isi_baru()).await;
 
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
@@ -698,7 +699,7 @@ async fn tim_mb_changes_the_name_description_and_quota(db: PgPool) {
             "deleted_at": null,
         })
     );
-    for cookie in [&k.mahasiswa, &k.tim_mb] {
+    for cookie in [&k.mahasiswa, &k.panitia_magang] {
         assert_eq!(names(&k.app, URI, cookie).await, ["Frontend Developer"]);
     }
     assert_eq!(posisi_count(&k.db).await, 1);
@@ -715,7 +716,7 @@ async fn the_company_and_period_of_a_position_cannot_be_changed(db: PgPool) {
     for (field, value) in [("id_perusahaan", lain), ("id_periode", periode_lain)] {
         let mut body = isi_baru();
         body[field] = json!(value);
-        let response = ubah(&k.app, Some(&k.tim_mb), id, body).await;
+        let response = ubah(&k.app, Some(&k.panitia_magang), id, body).await;
         assert_eq!(
             response.status(),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -753,7 +754,7 @@ async fn changing_rejects_bad_values_without_saving(db: PgPool) {
     for (field, value, message) in cases {
         let mut body = isi_baru();
         body[field] = value;
-        let response = ubah(&k.app, Some(&k.tim_mb), id, body).await;
+        let response = ubah(&k.app, Some(&k.panitia_magang), id, body).await;
         assert_eq!(
             response.status(),
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -765,19 +766,19 @@ async fn changing_rejects_bad_values_without_saving(db: PgPool) {
     // A field left out is rejected too, as every field is replaced.
     let mut body = isi_baru();
     body.as_object_mut().unwrap().remove("kuota");
-    let response = ubah(&k.app, Some(&k.tim_mb), id, body).await;
+    let response = ubah(&k.app, Some(&k.panitia_magang), id, body).await;
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     let response = send(
         &k.app,
         "PATCH",
         &format!("{URI}/abc"),
-        Some(&k.tim_mb),
+        Some(&k.panitia_magang),
         Some(isi_baru()),
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    let response = ubah(&k.app, Some(&k.tim_mb), 999_999, isi_baru()).await;
+    let response = ubah(&k.app, Some(&k.panitia_magang), 999_999, isi_baru()).await;
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 
     assert_eq!(k.stored(id).await, before);
@@ -789,7 +790,7 @@ async fn hiding_a_position_takes_it_out_of_the_catalog_but_keeps_its_row(db: PgP
     let tetap = k.posisi("Backend").await;
     let hilang = k.posisi("Frontend").await;
 
-    let response = sembunyikan(&k.app, Some(&k.tim_mb), hilang).await;
+    let response = sembunyikan(&k.app, Some(&k.panitia_magang), hilang).await;
     assert_eq!(response.status(), StatusCode::OK);
     let hidden = json_body(response).await;
     assert_eq!(hidden["id_posisi"], hilang);
@@ -809,7 +810,7 @@ async fn hiding_a_position_takes_it_out_of_the_catalog_but_keeps_its_row(db: PgP
     .unwrap();
     assert!(is_wib);
 
-    for cookie in [&k.mahasiswa, &k.tim_mb] {
+    for cookie in [&k.mahasiswa, &k.panitia_magang] {
         assert_eq!(names(&k.app, URI, cookie).await, ["Backend"]);
     }
     assert_eq!(posisi_count(&k.db).await, 2);
@@ -817,30 +818,32 @@ async fn hiding_a_position_takes_it_out_of_the_catalog_but_keeps_its_row(db: PgP
 }
 
 #[sqlx::test]
-async fn tim_mb_can_list_the_hidden_positions_after_the_others(db: PgPool) {
+async fn panitia_magang_can_list_the_hidden_positions_after_the_others(db: PgPool) {
     let k = katalog(db).await;
     let awal = k.posisi("Analis").await;
     k.posisi("Zebra").await;
     k.posisi("Backend").await;
     assert_eq!(
-        sembunyikan(&k.app, Some(&k.tim_mb), awal).await.status(),
+        sembunyikan(&k.app, Some(&k.panitia_magang), awal)
+            .await
+            .status(),
         StatusCode::OK
     );
 
     let uri = format!("{URI}?termasuk_dihapus=true");
     assert_eq!(
-        names(&k.app, &uri, &k.tim_mb).await,
+        names(&k.app, &uri, &k.panitia_magang).await,
         ["Backend", "Zebra", "Analis"]
     );
-    let list = json_body(get(&k.app, &uri, Some(&k.tim_mb)).await).await;
+    let list = json_body(get(&k.app, &uri, Some(&k.panitia_magang)).await).await;
     assert!(list[0]["deleted_at"].is_null());
     assert!(list[2]["deleted_at"].is_string());
 
     // The other filters still apply.
     let uri = format!("{URI}?termasuk_dihapus=true&s=analis");
-    assert_eq!(names(&k.app, &uri, &k.tim_mb).await, ["Analis"]);
+    assert_eq!(names(&k.app, &uri, &k.panitia_magang).await, ["Analis"]);
 
-    // Only asking for the hidden ones is Tim MB's alone.
+    // Only asking for the hidden ones is Panitia Magang's alone.
     let response = get(
         &k.app,
         &format!("{URI}?termasuk_dihapus=true"),
@@ -857,7 +860,7 @@ async fn tim_mb_can_list_the_hidden_positions_after_the_others(db: PgPool) {
     let response = get(
         &k.app,
         &format!("{URI}?termasuk_dihapus=ya"),
-        Some(&k.tim_mb),
+        Some(&k.panitia_magang),
     )
     .await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
@@ -868,28 +871,36 @@ async fn a_hidden_position_cannot_be_hidden_or_changed_again(db: PgPool) {
     let k = katalog(db).await;
     let id = k.posisi("Backend").await;
     assert_eq!(
-        sembunyikan(&k.app, Some(&k.tim_mb), id).await.status(),
+        sembunyikan(&k.app, Some(&k.panitia_magang), id)
+            .await
+            .status(),
         StatusCode::OK
     );
     let before = k.stored(id).await;
 
     assert_eq!(
-        sembunyikan(&k.app, Some(&k.tim_mb), id).await.status(),
+        sembunyikan(&k.app, Some(&k.panitia_magang), id)
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        sembunyikan(&k.app, Some(&k.tim_mb), 999_999).await.status(),
+        sembunyikan(&k.app, Some(&k.panitia_magang), 999_999)
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        ubah(&k.app, Some(&k.tim_mb), id, isi_baru()).await.status(),
+        ubah(&k.app, Some(&k.panitia_magang), id, isi_baru())
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
     let response = send(
         &k.app,
         "DELETE",
         &format!("{URI}/abc"),
-        Some(&k.tim_mb),
+        Some(&k.panitia_magang),
         None,
     )
     .await;
@@ -906,22 +917,29 @@ async fn a_position_of_a_hidden_company_cannot_be_changed_or_hidden(db: PgPool) 
     let before = k.stored(id).await;
 
     assert_eq!(
-        ubah(&k.app, Some(&k.tim_mb), id, isi_baru()).await.status(),
+        ubah(&k.app, Some(&k.panitia_magang), id, isi_baru())
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        sembunyikan(&k.app, Some(&k.tim_mb), id).await.status(),
+        sembunyikan(&k.app, Some(&k.panitia_magang), id)
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
     // Nor listed, even with the hidden positions.
     let uri = format!("{URI}?termasuk_dihapus=true");
-    assert_eq!(names(&k.app, &uri, &k.tim_mb).await, Vec::<String>::new());
+    assert_eq!(
+        names(&k.app, &uri, &k.panitia_magang).await,
+        Vec::<String>::new()
+    );
 
     assert_eq!(k.stored(id).await, before);
 }
 
 #[sqlx::test]
-async fn only_tim_mb_can_change_or_hide_a_position(db: PgPool) {
+async fn only_panitia_magang_can_change_or_hide_a_position(db: PgPool) {
     let k = katalog(db).await;
     let id = k.posisi("Backend").await;
     let user = insert_pengguna(&k.db, "tanpa.peran@gmail.com").await;

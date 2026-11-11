@@ -9,7 +9,7 @@ mod session;
 mod tests;
 
 pub use google::GoogleClient;
-pub use middleware::require_tim_mb;
+pub use middleware::require_panitia_magang;
 pub use model::{Peran, User};
 pub use repository::{find_peran, spawn_token_cleanup};
 pub use routes::routes;

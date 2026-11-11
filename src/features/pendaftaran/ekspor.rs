@@ -1,4 +1,4 @@
-//! Exports the pendaftaran Tim MB picked to a file. Excel (.xlsx) is the only format for now.
+//! Exports the pendaftaran Panitia Magang picked to a file. Excel (.xlsx) is the only format for now.
 
 use rust_xlsxwriter::{Color, ExcelDateTime, Format, FormatAlign, Url, Workbook, XlsxError};
 use serde::Deserialize;
@@ -440,7 +440,7 @@ pub fn buat_xlsx(semua: &[BarisEkspor], info: &InfoEkspor) -> Result<Vec<u8>, Xl
         (
             "Link berkas",
             format!(
-                "Dapat dibuka siapa pun tanpa login, sampai {}. Setelah itu, minta ekspor ulang ke Tim MB.",
+                "Dapat dibuka siapa pun tanpa login, sampai {}. Setelah itu, minta ekspor ulang ke Panitia Magang.",
                 waktu_wib(info.tautan_berlaku_sampai)
             ),
         ),

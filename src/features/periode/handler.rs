@@ -25,7 +25,7 @@ pub async fn list(
 
     // Mahasiswa only ever sees running periods, so any other id simply finds nothing.
     let status = match (peran, query.status) {
-        (Peran::TimMb, status) => status,
+        (Peran::PanitiaMagang, status) => status,
         (Peran::Mahasiswa, None | Some(StatusPeriode::Berlangsung)) => {
             Some(StatusPeriode::Berlangsung)
         }

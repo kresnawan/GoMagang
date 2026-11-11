@@ -41,6 +41,7 @@ fn config() -> Config {
         cookie_secure: false,
         upload_dir: Default::default(),
         surat_signing_key: None,
+        smtp: None,
     }
 }
 
@@ -368,12 +369,12 @@ async fn login_adds_the_mahasiswa_row_for_an_existing_pengguna(db: PgPool) {
     assert_eq!(row_counts(&db).await, (1, 1));
 }
 
-const TIM_MB_EMAIL: &str = "tim.mb@gmail.com";
+const PANITIA_MAGANG_EMAIL: &str = "panitia.magang@gmail.com";
 
-fn tim_mb_claims() -> Value {
+fn panitia_magang_claims() -> Value {
     let mut claims = id_token_claims();
-    claims["sub"] = json!("tim-mb-google-sub");
-    claims["email"] = json!(TIM_MB_EMAIL);
+    claims["sub"] = json!("panitia-magang-google-sub");
+    claims["email"] = json!(PANITIA_MAGANG_EMAIL);
     claims.as_object_mut().unwrap().remove("hd");
     claims
 }
@@ -386,9 +387,9 @@ async fn insert_pengguna_only(db: &PgPool, email: &str) -> i32 {
         .unwrap()
 }
 
-async fn register_tim_mb(db: &PgPool, email: &str) -> i32 {
+async fn register_panitia_magang(db: &PgPool, email: &str) -> i32 {
     let id_pengguna = insert_pengguna_only(db, email).await;
-    sqlx::query("INSERT INTO tim_mb (id_pengguna, nama) VALUES ($1, 'Tim MB')")
+    sqlx::query("INSERT INTO panitia_magang (id_pengguna, nama) VALUES ($1, 'Panitia Magang')")
         .bind(id_pengguna)
         .execute(db)
         .await
@@ -410,16 +411,16 @@ async fn login_with(db: &PgPool, claims: Value) -> Response<Body> {
 }
 
 #[sqlx::test]
-async fn registered_tim_mb_logs_in_with_gmail_and_goes_to_their_pages(db: PgPool) {
-    let id_pengguna = register_tim_mb(&db, TIM_MB_EMAIL).await;
-    let mock = app_with_google(db.clone(), tim_mb_claims()).await;
+async fn registered_panitia_magang_logs_in_with_gmail_and_goes_to_their_pages(db: PgPool) {
+    let id_pengguna = register_panitia_magang(&db, PANITIA_MAGANG_EMAIL).await;
+    let mock = app_with_google(db.clone(), panitia_magang_claims()).await;
 
     let response = send(mock.router.clone(), "GET", CALLBACK, Some(STATE_COOKIE)).await;
 
-    assert_eq!(location(&response), "http://frontend.test/tim-mb");
+    assert_eq!(location(&response), "http://frontend.test/panitia-magang");
     assert_eq!(
         google_sub_of(&db, id_pengguna).await.as_deref(),
-        Some("tim-mb-google-sub")
+        Some("panitia-magang-google-sub")
     );
     assert_eq!(token_count(&db).await, 1);
 
@@ -427,29 +428,33 @@ async fn registered_tim_mb_logs_in_with_gmail_and_goes_to_their_pages(db: PgPool
     let me = send(mock.router.clone(), "GET", "/auth/me", Some(&access)).await;
     assert_eq!(me.status(), StatusCode::OK);
 
-    assert_eq!(row_counts(&db).await, (1, 0), "no mahasiswa row for Tim MB");
+    assert_eq!(
+        row_counts(&db).await,
+        (1, 0),
+        "no mahasiswa row for Panitia Magang"
+    );
     let data = send(mock.router, "GET", "/api/v1/mahasiswa/data", Some(&access)).await;
     assert_eq!(data.status(), StatusCode::FORBIDDEN);
 }
 
 #[sqlx::test]
-async fn tim_mb_can_log_in_again_and_email_case_does_not_matter(db: PgPool) {
-    register_tim_mb(&db, "Tim.MB@gmail.com").await;
+async fn panitia_magang_can_log_in_again_and_email_case_does_not_matter(db: PgPool) {
+    register_panitia_magang(&db, "Panitia.Magang@gmail.com").await;
 
     for _ in 0..2 {
-        let response = login_with(&db, tim_mb_claims()).await;
-        assert_eq!(location(&response), "http://frontend.test/tim-mb");
+        let response = login_with(&db, panitia_magang_claims()).await;
+        assert_eq!(location(&response), "http://frontend.test/panitia-magang");
     }
 
     assert_eq!(row_counts(&db).await, (1, 0));
 }
 
 #[sqlx::test]
-async fn another_google_account_cannot_take_over_a_tim_mb_row(db: PgPool) {
-    let id_pengguna = register_tim_mb(&db, TIM_MB_EMAIL).await;
-    login_with(&db, tim_mb_claims()).await;
+async fn another_google_account_cannot_take_over_a_panitia_magang_row(db: PgPool) {
+    let id_pengguna = register_panitia_magang(&db, PANITIA_MAGANG_EMAIL).await;
+    login_with(&db, panitia_magang_claims()).await;
 
-    let mut claims = tim_mb_claims();
+    let mut claims = panitia_magang_claims();
     claims["sub"] = json!("attacker-google-sub");
     let response = login_with(&db, claims).await;
 
@@ -460,14 +465,14 @@ async fn another_google_account_cannot_take_over_a_tim_mb_row(db: PgPool) {
     assert!(set_cookie(response.headers(), "access_token").is_none());
     assert_eq!(
         google_sub_of(&db, id_pengguna).await.as_deref(),
-        Some("tim-mb-google-sub")
+        Some("panitia-magang-google-sub")
     );
     assert_eq!(token_count(&db).await, 1);
 }
 
 #[sqlx::test]
-async fn gmail_outside_tim_mb_is_rejected_without_creating_anything(db: PgPool) {
-    let response = login_with(&db, tim_mb_claims()).await;
+async fn gmail_outside_panitia_magang_is_rejected_without_creating_anything(db: PgPool) {
+    let response = login_with(&db, panitia_magang_claims()).await;
 
     assert_eq!(
         location(&response),
@@ -479,10 +484,10 @@ async fn gmail_outside_tim_mb_is_rejected_without_creating_anything(db: PgPool) 
 }
 
 #[sqlx::test]
-async fn gmail_in_pengguna_but_not_in_tim_mb_is_rejected(db: PgPool) {
-    let id_pengguna = insert_pengguna_only(&db, TIM_MB_EMAIL).await;
+async fn gmail_in_pengguna_but_not_in_panitia_magang_is_rejected(db: PgPool) {
+    let id_pengguna = insert_pengguna_only(&db, PANITIA_MAGANG_EMAIL).await;
 
-    let response = login_with(&db, tim_mb_claims()).await;
+    let response = login_with(&db, panitia_magang_claims()).await;
 
     assert_eq!(
         location(&response),
@@ -494,14 +499,14 @@ async fn gmail_in_pengguna_but_not_in_tim_mb_is_rejected(db: PgPool) {
 
 #[sqlx::test]
 async fn gmail_login_needs_a_verified_personal_account(db: PgPool) {
-    register_tim_mb(&db, TIM_MB_EMAIL).await;
+    register_panitia_magang(&db, PANITIA_MAGANG_EMAIL).await;
 
-    let mut unverified = tim_mb_claims();
+    let mut unverified = panitia_magang_claims();
     unverified["email_verified"] = json!(false);
-    let mut hosted = tim_mb_claims();
+    let mut hosted = panitia_magang_claims();
     hosted["hd"] = json!("gmail.com");
-    let mut lookalike = tim_mb_claims();
-    lookalike["email"] = json!("tim.mb@evilgmail.com");
+    let mut lookalike = panitia_magang_claims();
+    lookalike["email"] = json!("panitia.magang@evilgmail.com");
 
     for claims in [unverified, hosted, lookalike] {
         let response = login_with(&db, claims).await;
@@ -550,6 +555,7 @@ async fn migrations_create_every_table_in_the_erd(db: PgPool) {
             "log_status",
             "mahasiswa",
             "mata_kuliah_konversi",
+            "panitia_magang",
             "pendaftaran",
             "pengguna",
             "penyetaraan_mk",
@@ -560,7 +566,6 @@ async fn migrations_create_every_table_in_the_erd(db: PgPool) {
             "status_pendaftaran",
             "surat_keterangan",
             "templat_sp_dpa",
-            "tim_mb",
             "token_refresh",
         ]
     );

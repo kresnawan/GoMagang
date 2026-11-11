@@ -20,7 +20,7 @@ use crate::{
 const BUKAN_AKTIF: AppError =
     AppError::Conflict("Konversi mata kuliah hanya untuk pendaftaran berstatus Aktif.");
 
-/// The mata kuliah that are not hidden. Tim MB may ask for the hidden ones too.
+/// The mata kuliah that are not hidden. Panitia Magang may ask for the hidden ones too.
 pub async fn list_mk(
     State(state): State<AppState>,
     user: User,
@@ -31,11 +31,13 @@ pub async fn list_mk(
         .ok_or(AppError::Forbidden)?;
 
     let termasuk_dihapus = query.termasuk_dihapus.unwrap_or(false);
-    if termasuk_dihapus && !matches!(peran, Peran::TimMb) {
+    if termasuk_dihapus && !matches!(peran, Peran::PanitiaMagang) {
         return Err(AppError::Forbidden);
     }
 
-    Ok(Json(repository::list_mk(&state.db, termasuk_dihapus).await?))
+    Ok(Json(
+        repository::list_mk(&state.db, termasuk_dihapus).await?,
+    ))
 }
 
 pub async fn create_mk(
@@ -65,7 +67,7 @@ pub async fn soft_delete_mk(
     Ok(Json(mata_kuliah))
 }
 
-/// The mata kuliah chosen for a pendaftaran: any for Tim MB, only their own for a mahasiswa.
+/// The mata kuliah chosen for a pendaftaran: any for Panitia Magang, only their own for a mahasiswa.
 pub async fn list_penyetaraan(
     State(state): State<AppState>,
     user: User,

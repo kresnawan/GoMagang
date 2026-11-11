@@ -5,15 +5,15 @@ use axum::{
 };
 
 use super::handler;
-use crate::{features::auth::require_tim_mb, state::AppState};
+use crate::{features::auth::require_panitia_magang, state::AppState};
 
 pub fn routes(state: &AppState) -> Router<AppState> {
-    let create =
-        post(handler::create).route_layer(from_fn_with_state(state.clone(), require_tim_mb));
+    let create = post(handler::create)
+        .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
 
     let ubah = delete(handler::sembunyikan)
         .patch(handler::ubah)
-        .route_layer(from_fn_with_state(state.clone(), require_tim_mb));
+        .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
 
     Router::new()
         .route("/posisi", get(handler::list).merge(create))

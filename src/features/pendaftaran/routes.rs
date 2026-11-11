@@ -7,7 +7,7 @@ use axum::{
 
 use super::{handler, model::MAX_BODY_SIZE};
 use crate::{
-    features::{auth::require_tim_mb, mahasiswa::require_mahasiswa},
+    features::{auth::require_panitia_magang, mahasiswa::require_mahasiswa},
     state::AppState,
 };
 
@@ -17,19 +17,19 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         .route_layer(from_fn_with_state(state.clone(), require_mahasiswa));
 
     let update_status = patch(handler::update_status)
-        .route_layer(from_fn_with_state(state.clone(), require_tim_mb));
+        .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
 
     let accept =
         patch(handler::accept).route_layer(from_fn_with_state(state.clone(), require_mahasiswa));
 
-    let simpan_jadwal =
-        put(handler::simpan_jadwal).route_layer(from_fn_with_state(state.clone(), require_tim_mb));
+    let simpan_jadwal = put(handler::simpan_jadwal)
+        .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
 
     let simpan_plotting = put(handler::simpan_plotting)
-        .route_layer(from_fn_with_state(state.clone(), require_tim_mb));
+        .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
 
-    let ekspor =
-        post(handler::ekspor).route_layer(from_fn_with_state(state.clone(), require_tim_mb));
+    let ekspor = post(handler::ekspor)
+        .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
 
     Router::new()
         .route(
