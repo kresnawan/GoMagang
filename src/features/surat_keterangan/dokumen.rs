@@ -41,6 +41,9 @@ struct Kanvas {
 }
 
 impl Kanvas {
+    /// Nama resource font PDF untuk jenis huruf: `F1` untuk biasa (Times-Roman) dan `F2` untuk
+    /// tebal
+    /// (Times-Bold).
     fn font(huruf: Huruf) -> Name<'static> {
         match huruf {
             Huruf::Biasa => F_BIASA,
@@ -48,6 +51,8 @@ impl Kanvas {
         }
     }
 
+    /// Menulis teks yang sudah di-encode pada posisi `x` dan baseline `atas` (diukur dari atas
+    /// halaman), dengan huruf, ukuran, dan warna tertentu.
     fn teks(&mut self, huruf: Huruf, ukuran: f32, x: f32, atas: f32, teks: &[u8], warna: [f32; 3]) {
         self.isi
             .set_fill_rgb(warna[0], warna[1], warna[2])
@@ -58,13 +63,17 @@ impl Kanvas {
             .end_text();
     }
 
+    /// Menulis satu baris teks hitam yang diratakan ke tengah halaman.
     fn teks_tengah(&mut self, huruf: Huruf, ukuran: f32, atas: f32, teks: &str) {
         let teks = huruf.encode(teks);
         let x = (LEBAR - huruf.lebar(&teks, ukuran)) / 2.0;
         self.teks(huruf, ukuran, x, atas, &teks, HITAM);
     }
 
-    /// Writes a paragraph from `x`, wrapped at the right margin. Returns the last baseline.
+    /// Menulis paragraf mulai dari `x`, dibungkus otomatis di margin kanan.
+    ///
+    /// Mengembalikan baseline baris terakhir, sehingga elemen berikutnya bisa diletakkan di
+    /// bawahnya.
     fn paragraf(&mut self, x: f32, atas: f32, teks: &str) -> f32 {
         let mut baseline = atas;
         for (i, baris) in Huruf::Biasa
@@ -78,6 +87,9 @@ impl Kanvas {
         baseline
     }
 
+    /// Menggambar garis horizontal dari `x1` ke `x2` pada ketinggian `atas`, dengan ketebalan dan
+    /// warna
+    /// tertentu.
     fn garis(&mut self, x1: f32, x2: f32, atas: f32, tebal: f32, warna: [f32; 3]) {
         self.isi
             .set_stroke_rgb(warna[0], warna[1], warna[2])
@@ -87,8 +99,13 @@ impl Kanvas {
             .stroke();
     }
 
-    /// Text made of plain and link-coloured pieces, shrunk if needed to fit between `x` and the
-    /// right margin.
+    /// Menulis satu baris yang terdiri dari potongan teks biasa dan potongan bergaya tautan (biru
+    /// dan
+    /// bergaris bawah).
+    ///
+    /// Ukuran font diperkecil bila perlu, maksimal `ukuran_maks`, agar seluruh baris muat di antara
+    /// `x`
+    /// dan margin kanan. Dipakai untuk catatan verifikasi yang memuat alamat halaman verifikasi.
     fn baris_campur(&mut self, x: f32, atas: f32, ukuran_maks: f32, potongan: &[(&str, bool)]) {
         let potongan: Vec<(Vec<u8>, bool)> = potongan
             .iter()
@@ -112,8 +129,12 @@ impl Kanvas {
         }
     }
 
-    /// Draws the QR with its top left corner at (`x`, `atas`), joining dark modules of a row
-    /// into one rectangle each.
+    /// Menggambar QR code dengan sudut kiri atas di (`x`, `atas`) dan sisi sepanjang `ukuran`
+    /// point.
+    ///
+    /// Modul gelap yang bersebelahan dalam satu baris digabung menjadi satu persegi panjang,
+    /// sehingga
+    /// jumlah perintah gambar di PDF jauh berkurang.
     fn qr(&mut self, qr: &QrCode, x: f32, atas: f32, ukuran: f32) {
         let modul = ukuran / qr.size() as f32;
         self.isi.set_fill_rgb(0.0, 0.0, 0.0);
@@ -141,8 +162,11 @@ impl Kanvas {
     }
 }
 
-/// "2026-11-06" as printed in the surat, with non-breaking spaces so a date never splits over
-/// two lines. The content is built from a `Date`, so the fallback is never expected.
+/// Menulis tanggal ISO `YYYY-MM-DD` seperti di surat, misalnya `6 November 2026`.
+///
+/// Spasinya diganti spasi tak terputus agar tanggal tidak pernah terpotong ke dua baris. Isi surat
+/// selalu dibuat dari `Date` yang valid, sehingga cabang cadangan (teks asli dikembalikan apa
+/// adanya) tidak diharapkan terjadi.
 fn tanggal(iso: &str) -> String {
     Date::parse(iso, format_description!("[year]-[month]-[day]"))
         .map(templat::tanggal_panjang)
@@ -150,7 +174,10 @@ fn tanggal(iso: &str) -> String {
         .replace(' ', "\u{a0}")
 }
 
-/// The QR alone is hundreds of rectangles, so the page content shrinks several times over.
+/// Mengompres content stream halaman dengan zlib (filter `FlateDecode`).
+///
+/// QR code saja terdiri dari ratusan persegi panjang, sehingga kompresi memperkecil isi halaman
+/// beberapa kali lipat.
 fn kompres(isi: &[u8]) -> Vec<u8> {
     use std::io::Write;
 
@@ -161,8 +188,18 @@ fn kompres(isi: &[u8]) -> Vec<u8> {
         .expect("writing to memory cannot fail")
 }
 
-/// `url_verifikasi` is the full link the QR opens, with the code; `halaman_verifikasi` is the
-/// page itself, printed for people who type it in.
+/// Menyusun surat keterangan sebagai PDF A4 satu halaman mengikuti templat fakultas.
+///
+/// Isi halaman: kop surat, judul dan nomor, data mahasiswa, isi keterangan magang, penanda tangan
+/// dengan QR code di tempat tanda tangan basah, dan catatan cara verifikasi.
+///
+/// - `url_verifikasi`: tautan lengkap beserta kode yang dibuka QR code. QR code juga bisa diklik di
+///   pembaca PDF.
+/// - `halaman_verifikasi`: alamat halaman verifikasi tanpa kode, dicetak untuk orang yang mengetik
+///   alamatnya sendiri.
+///
+/// Hasilnya deterministik: tidak bergantung pada jam atau angka acak, sehingga isi yang sama selalu
+/// menghasilkan byte yang sama. Gagal hanya bila URL terlalu panjang untuk QR code.
 pub fn render(
     isi: &IsiSurat,
     url_verifikasi: &str,

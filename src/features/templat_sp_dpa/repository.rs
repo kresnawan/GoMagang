@@ -2,9 +2,11 @@ use sqlx::PgPool;
 
 use super::model::TemplatSpDpa;
 
-/// The template in use: the one saved last. Older rows are kept as history.
+/// Templat yang sedang berlaku, yaitu yang terakhir disimpan. Baris yang lebih lama disimpan
+/// sebagai riwayat.
 ///
-/// updated_at has no time zone and is written in WIB, so it is sent out with the +07:00 offset.
+/// Mengembalikan `None` bila belum ada templat. `updated_at` dikirim dalam WIB dengan offset
+/// `+07:00`.
 pub async fn find(db: &PgPool) -> Result<Option<TemplatSpDpa>, sqlx::Error> {
     sqlx::query_as(
         "SELECT id_templat, tautan_templat,
@@ -17,7 +19,8 @@ pub async fn find(db: &PgPool) -> Result<Option<TemplatSpDpa>, sqlx::Error> {
     .await
 }
 
-/// Saves a new link as the template in use.
+/// Menyimpan tautan baru sebagai templat yang berlaku, dengan `updated_at` berisi waktu sekarang
+/// dalam WIB.
 pub async fn simpan(db: &PgPool, tautan: &str) -> Result<TemplatSpDpa, sqlx::Error> {
     sqlx::query_as(
         "INSERT INTO templat_sp_dpa (tautan_templat, updated_at)

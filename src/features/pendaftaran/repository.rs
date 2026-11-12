@@ -7,8 +7,11 @@ use super::model::{
     panitia_magang_can_change,
 };
 
-/// Holds back this mahasiswa's other requests until the transaction ends, so that two requests
-/// cannot both pass the checks on how many pendaftaran are running.
+/// Mengunci baris mahasiswa (`FOR UPDATE`) sampai transaksi selesai.
+///
+/// Request lain dari mahasiswa yang sama (mendaftar, konfirmasi penerimaan) tertahan selama kunci
+/// dipegang, sehingga dua request tidak bisa sama-sama lolos pemeriksaan jumlah pendaftaran yang
+/// berjalan.
 pub async fn lock_mahasiswa(conn: &mut PgConnection, id_pengguna: i32) -> Result<(), sqlx::Error> {
     sqlx::query("SELECT 1 FROM mahasiswa WHERE id_pengguna = $1 FOR UPDATE")
         .bind(id_pengguna)
@@ -17,12 +20,15 @@ pub async fn lock_mahasiswa(conn: &mut PgConnection, id_pengguna: i32) -> Result
     Ok(())
 }
 
-/// Holds back other changes to these pendaftaran until the transaction ends, then reads their
-/// latest statuses, ordered by id. The fixed order keeps two requests from deadlocking.
+/// Mengunci baris-baris pendaftaran ini sampai transaksi selesai, lalu membaca status terbarunya,
+/// urut berdasarkan id.
 ///
-/// Two statements on purpose. FOR UPDATE on a join with status_pendaftaran would lose a row whose
-/// status changed while waiting for the lock: Postgres rechecks the join using the new id_status
-/// against the old status row, so the row looks as if it does not exist.
+/// Urutan penguncian yang tetap mencegah dua request saling menunggu (deadlock).
+///
+/// Penguncian dan pembacaan status sengaja dipisah menjadi dua statement. `FOR UPDATE` pada join
+/// dengan `status_pendaftaran` bisa kehilangan baris yang statusnya berubah saat menunggu kunci:
+/// PostgreSQL mengecek ulang join memakai `id_status` baru terhadap baris status lama, sehingga
+/// barisnya tampak seperti tidak ada.
 async fn lock_statuses(
     conn: &mut PgConnection,
     id_pendaftaran: &[i32],
@@ -50,10 +56,12 @@ async fn lock_statuses(
     .await
 }
 
-/// Whether the position exists, is not hidden, belongs to a company that is not hidden, and its
-/// period is running. Its quota is information only, so any number of mahasiswa may register for it.
+/// Memeriksa posisi tujuan pendaftaran.
 ///
-/// waktu_mulai and waktu_tutup have no time zone and are written in WIB.
+/// Mengembalikan `None` bila posisi tidak ada, disembunyikan, atau perusahaannya disembunyikan.
+/// Bila
+/// ada, hasilnya menyatakan apakah periodenya sedang berlangsung menurut waktu WIB. Kuota tidak
+/// diperiksa, karena kuota hanya informasi dan jumlah pendaftar tidak dibatasi.
 pub async fn find_posisi(
     conn: &mut PgConnection,
     id_posisi: i32,
@@ -71,9 +79,12 @@ pub async fn find_posisi(
     .await
 }
 
-/// Counts this mahasiswa's pendaftaran: all of them in the period of the target position, those
-/// still running for that position, and those that are Aktif. Positions hidden since then still
-/// count.
+/// Menghitung pendaftaran mahasiswa ini untuk pemeriksaan sebelum mendaftar:
+/// - `di_periode`: semua pendaftaran di periode posisi tujuan, dalam status apa pun.
+/// - `berjalan_di_posisi`: pendaftaran di posisi tujuan yang belum berstatus akhir.
+/// - `aktif`: pendaftaran berstatus `Aktif`.
+///
+/// Pendaftaran pada posisi yang sudah disembunyikan tetap dihitung.
 pub async fn count_pendaftaran(
     conn: &mut PgConnection,
     id_pengguna: i32,
@@ -100,10 +111,11 @@ pub async fn count_pendaftaran(
     .await
 }
 
-/// Saves the pendaftaran with its first status log and its files.
+/// Menyimpan pendaftaran baru berstatus `Menunggu Verifikasi`, baris log status pertamanya, dan
+/// baris setiap berkasnya.
 ///
-/// The time columns have no time zone, so they are written in WIB explicitly instead of relying
-/// on the database server's own time zone.
+/// Kolom waktu tidak punya zona waktu, sehingga diisi waktu WIB secara eksplisit, tidak bergantung
+/// pada zona waktu server database. Berkas di disk ditulis terpisah oleh pemanggil.
 pub async fn insert(
     conn: &mut PgConnection,
     id_pengguna: i32,
@@ -153,10 +165,30 @@ pub async fn insert(
     Ok(pendaftaran)
 }
 
-/// The rows that `list` and `count` look at, so that the total always follows the same filters.
-/// Takes the fields of `FilterPendaftaran` as $1 to $7.
+/// Ekspresi SQL tenggat konfirmasi penerimaan untuk pendaftaran beralias `p`: 12 jam setelah
+/// statusnya menjadi `Diterima`, dalam WIB seperti kolom waktu lainnya.
 ///
-/// strpos rather than LIKE, so that a % or _ in the search is just a character to look for.
+/// Waktu mulainya diambil dari baris `log_status` saat status berubah ke `Diterima`. Bila baris itu
+/// tidak ada, `updated_at` yang dipakai, karena tidak ada proses lain yang mengubahnya selama
+/// status masih `Diterima`. Makro ini satu-satunya sumber aturan tenggat, dipakai oleh daftar
+/// pendaftaran, konfirmasi penerimaan, dan pembatalan otomatis.
+macro_rules! batas_konfirmasi {
+    () => {
+        "(COALESCE(
+             (SELECT max(l.created_at)
+              FROM log_status l
+              JOIN status_pendaftaran ls ON ls.id_status = l.status_baru
+              WHERE l.id_pendaftaran = p.id_pendaftaran AND ls.status = 'Diterima'),
+             p.updated_at
+         ) + interval '1 minute')"
+    };
+}
+
+/// Bagian `FROM ... WHERE` yang dipakai bersama oleh [`list`] dan [`count`], sehingga total selalu
+/// mengikuti filter yang sama. Menerima field [`FilterPendaftaran`] sebagai `$1` sampai `$7`.
+///
+/// Pencarian nama memakai `strpos`, bukan `LIKE`, agar karakter `%` dan `_` dianggap karakter
+/// biasa.
 macro_rules! pendaftaran_terfilter {
     () => {
         " FROM pendaftaran p
@@ -174,10 +206,12 @@ macro_rules! pendaftaran_terfilter {
     };
 }
 
-/// The pendaftaran matching the filters, newest first. All of them if no page is given.
+/// Pendaftaran yang cocok dengan filter, dari yang paling baru; semuanya bila `halaman` bernilai
+/// `None`.
 ///
-/// The time columns are written in WIB, so they are sent out with the +07:00 offset. The cast drops
-/// the CHAR padding from nim.
+/// Kolom waktu disimpan dalam WIB, sehingga dikirim dengan offset `+07:00`. `batas_konfirmasi`
+/// hanya
+/// terisi untuk status `Diterima`. NIM di-cast ke teks agar spasi pengisi `CHAR` hilang.
 pub async fn list(
     db: &PgPool,
     filter: &FilterPendaftaran,
@@ -189,6 +223,9 @@ pub async fn list(
                 to_char(p.updated_at, 'YYYY-MM-DD\"T\"HH24:MI:SS+07:00') AS updated_at,
                 pm.id_posisi, pm.posisi, pm.id_periode,
                 pr.id_perusahaan, pr.nama_perusahaan,
+                CASE WHEN s.status = 'Diterima' THEN to_char(",
+        batas_konfirmasi!(),
+        ", 'YYYY-MM-DD\"T\"HH24:MI:SS+07:00') END AS batas_konfirmasi,
                 EXISTS (
                     SELECT 1 FROM jadwal_seleksi_substansi j
                     WHERE j.id_pendaftaran = p.id_pendaftaran
@@ -215,7 +252,7 @@ pub async fn list(
     .await
 }
 
-/// How many rows `list` has for these filters, across all of its pages.
+/// Jumlah seluruh baris [`list`] untuk filter ini, dari semua halaman.
 pub async fn count(db: &PgPool, filter: &FilterPendaftaran) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(concat!("SELECT count(*)", pendaftaran_terfilter!()))
         .bind(filter.id_pengguna)
@@ -229,6 +266,8 @@ pub async fn count(db: &PgPool, filter: &FilterPendaftaran) -> Result<i64, sqlx:
         .await
 }
 
+/// Berkas-berkas sebuah pendaftaran, sesuai urutan disimpan: berkas wajib dulu, lalu berkas
+/// tambahan.
 pub async fn list_berkas(db: &PgPool, id_pendaftaran: i32) -> Result<Vec<Berkas>, sqlx::Error> {
     sqlx::query_as(
         "SELECT id_berkas, jenis_berkas, nama_berkas, ukuran_berkas
@@ -241,7 +280,8 @@ pub async fn list_berkas(db: &PgPool, id_pendaftaran: i32) -> Result<Vec<Berkas>
     .await
 }
 
-/// The status changes of a pendaftaran, oldest first.
+/// Riwayat perubahan status sebuah pendaftaran, dari yang paling lama, dengan waktu dalam WIB
+/// (`+07:00`).
 pub async fn list_log(db: &PgPool, id_pendaftaran: i32) -> Result<Vec<LogStatus>, sqlx::Error> {
     sqlx::query_as(
         "SELECT l.id_log, lama.status AS status_lama, baru.status AS status_baru,
@@ -257,6 +297,9 @@ pub async fn list_log(db: &PgPool, id_pendaftaran: i32) -> Result<Vec<LogStatus>
     .await
 }
 
+/// Jadwal seleksi substansi sebuah pendaftaran (tanggal `YYYY-MM-DD`, jam `HH:MM`, dan lokasi),
+/// atau
+/// `None` bila belum diatur.
 pub async fn find_jadwal(
     db: &PgPool,
     id_pendaftaran: i32,
@@ -271,6 +314,9 @@ pub async fn find_jadwal(
     .await
 }
 
+/// Ringkasan surat keterangan sebuah pendaftaran (nama berkas, ukuran, dan nomor surat), atau
+/// `None`
+/// bila belum diterbitkan.
 pub async fn find_surat(
     db: &PgPool,
     id_pendaftaran: i32,
@@ -285,6 +331,7 @@ pub async fn find_surat(
     .await
 }
 
+/// Plotting DPM sebuah pendaftaran (nama dan kontak DPM), atau `None` bila belum diatur.
 pub async fn find_plotting(
     db: &PgPool,
     id_pendaftaran: i32,
@@ -295,7 +342,18 @@ pub async fn find_plotting(
         .await
 }
 
-/// Changes the status and logs who did it. The quota stays as it is, whatever the new status.
+/// Mengubah status pendaftaran dan mencatat siapa yang mengubahnya.
+///
+/// Dalam satu transaksi, pendaftaran dikunci dan status terbarunya dibaca, lalu perubahan dicek
+/// dengan [`panitia_magang_can_change`]. Bila diizinkan, status dan `updated_at` diubah, dan baris
+/// `log_status` ditambahkan berisi status lama, status baru, dan id Panitia Magang. Kuota posisi
+/// tidak berubah, apa pun status barunya.
+///
+/// Waktu diambil dengan `clock_timestamp()`, bukan `now()`. `now()` tetap bernilai waktu awal
+/// transaksi, sehingga perubahan yang sempat menunggu kunci bisa tercatat lebih awal dari perubahan
+/// sebelumnya.
+///
+/// Bila berhasil, status lama dikembalikan untuk keperluan email pemberitahuan.
 pub async fn update_status(
     db: &PgPool,
     id_pendaftaran: i32,
@@ -344,8 +402,12 @@ pub async fn update_status(
     Ok(UpdateStatusResult::Updated { status_lama })
 }
 
-/// Locks these pendaftaran and says why they cannot take the data of a stage, if so. Every one of
-/// them must exist and be in this status, and that stays true until the transaction ends.
+/// Mengunci pendaftaran-pendaftaran ini dan memeriksa apakah semuanya bisa menerima data sebuah
+/// tahap.
+///
+/// Semua harus ada dan berstatus `status_wajib`, dan kondisi itu tetap berlaku sampai transaksi
+/// selesai karena barisnya terkunci. Mengembalikan alasan penolakan (`NotFound` atau `NotAllowed`),
+/// atau `None` bila semuanya memenuhi.
 async fn cek_tahap(
     conn: &mut PgConnection,
     id_pendaftaran: &[i32],
@@ -362,8 +424,10 @@ async fn cek_tahap(
     Ok(None)
 }
 
-/// Shows on the mahasiswa's dashboard as the last change. The status stays as it is, so nothing is
-/// added to log_status.
+/// Mengisi `updated_at` pendaftaran-pendaftaran ini dengan waktu sekarang (WIB).
+///
+/// Waktu ini tampil di dasbor mahasiswa sebagai perubahan terakhir. Statusnya tidak berubah,
+/// sehingga tidak ada baris yang ditambahkan ke `log_status`.
 async fn perbarui_updated_at(
     conn: &mut PgConnection,
     id_pendaftaran: &[i32],
@@ -379,8 +443,12 @@ async fn perbarui_updated_at(
     Ok(())
 }
 
-/// Saves the same jadwal on every pendaftaran listed, replacing any they already have, or on none
-/// of them if one cannot take it.
+/// Menyimpan jadwal seleksi yang sama ke semua pendaftaran yang disebut, atau tidak ke satu pun
+/// bila
+/// ada yang tidak memenuhi syarat.
+///
+/// Semua pendaftaran harus berstatus `Lolos Seleksi Administrasi`. Jadwal yang sudah ada diganti
+/// (upsert), dan `updated_at` setiap pendaftaran diperbarui.
 pub async fn simpan_jadwal(
     db: &PgPool,
     data: &SimpanJadwal,
@@ -413,8 +481,11 @@ pub async fn simpan_jadwal(
     Ok(SimpanTahapResult::Saved)
 }
 
-/// Saves the same DPM on every pendaftaran listed, replacing any they already have, or on none of
-/// them if one cannot take it.
+/// Menyimpan DPM yang sama ke semua pendaftaran yang disebut, atau tidak ke satu pun bila ada yang
+/// tidak memenuhi syarat.
+///
+/// Semua pendaftaran harus berstatus `Aktif`. Plotting yang sudah ada diganti (upsert), dan
+/// `updated_at` setiap pendaftaran diperbarui.
 pub async fn simpan_plotting(
     db: &PgPool,
     data: &SimpanPlotting,
@@ -444,11 +515,21 @@ pub async fn simpan_plotting(
     Ok(SimpanTahapResult::Saved)
 }
 
-/// Makes this pendaftaran Aktif and withdraws the mahasiswa from their other running ones, logging
-/// each change. The quota stays as it is, and pendaftaran with a final status are left alone.
+/// Mengubah pendaftaran ini menjadi `Aktif` dan membatalkan pendaftaran lain milik mahasiswa yang
+/// masih berjalan.
 ///
-/// id_pengubah only refers to Panitia Magang, so it stays empty for what the mahasiswa does themselves, as
-/// in the first log of a new pendaftaran.
+/// Dalam satu transaksi:
+/// 1. Pendaftaran harus ada dan milik `id_pengguna`.
+/// 2. Mahasiswa dikunci, sehingga pendaftaran baru tidak bisa menyelip di samping yang `Aktif`.
+/// 3. Semua pendaftaran mahasiswa dikunci, sehingga perubahan status oleh Panitia Magang tertahan.
+/// 4. Pendaftaran harus `Diterima`, mahasiswa belum punya yang `Aktif`, dan tenggat konfirmasi 12
+///    jam
+///    belum lewat.
+/// 5. Pendaftaran ini menjadi `Aktif`, dan pendaftaran lain yang belum berstatus akhir menjadi
+///    `Batal/Mengundurkan Diri`, masing-masing dengan baris log.
+///
+/// `id_pengubah` di log dibiarkan kosong, karena kolom itu hanya merujuk ke Panitia Magang, sama
+/// seperti log pertama pendaftaran baru. Kuota tidak berubah.
 pub async fn accept(
     db: &PgPool,
     id_pendaftaran: i32,
@@ -491,6 +572,20 @@ pub async fn accept(
         return Ok(AcceptResult::HasAktif);
     }
 
+    let kedaluwarsa: bool = sqlx::query_scalar(concat!(
+        "SELECT ",
+        batas_konfirmasi!(),
+        " <= clock_timestamp() AT TIME ZONE 'Asia/Jakarta'
+         FROM pendaftaran p
+         WHERE p.id_pendaftaran = $1",
+    ))
+    .bind(id_pendaftaran)
+    .fetch_one(&mut *tx)
+    .await?;
+    if kedaluwarsa {
+        return Ok(AcceptResult::Kedaluwarsa);
+    }
+
     // clock_timestamp instead of now(), which stays at the time the transaction began, so that a
     // change that had to wait for the locks is still logged after the one before it.
     sqlx::query(
@@ -527,6 +622,70 @@ pub async fn accept(
     Ok(AcceptResult::Accepted)
 }
 
+/// Membatalkan semua pendaftaran `Diterima` yang tenggat konfirmasinya sudah lewat, lalu
+/// mengembalikan id pendaftaran yang dibatalkan.
+///
+/// Kandidat dicari dulu, lalu dikunci berurutan dan dicek ulang statusnya. Dengan begitu,
+/// mahasiswa yang berhasil mengonfirmasi tepat sebelum tenggat (saat proses ini menunggu kunci)
+/// tidak ikut dibatalkan. Bila ada beberapa server yang menjalankan proses ini bersamaan, tidak
+/// ada pembatalan ganda.
+///
+/// Status diubah menjadi `Batal/Mengundurkan Diri` dengan baris log berstatus lama `Diterima`.
+/// `id_pengubah` dibiarkan kosong karena tidak ada orang yang melakukan perubahan ini.
+pub async fn batalkan_yang_kedaluwarsa(db: &PgPool) -> Result<Vec<i32>, sqlx::Error> {
+    let mut tx = db.begin().await?;
+
+    let calon: Vec<i32> = sqlx::query_scalar(concat!(
+        "SELECT p.id_pendaftaran
+         FROM pendaftaran p
+         JOIN status_pendaftaran s ON s.id_status = p.id_status
+         WHERE s.status = 'Diterima'
+           AND ",
+        batas_konfirmasi!(),
+        " <= clock_timestamp() AT TIME ZONE 'Asia/Jakarta'",
+    ))
+    .fetch_all(&mut *tx)
+    .await?;
+    if calon.is_empty() {
+        return Ok(calon);
+    }
+
+    // A mahasiswa may have confirmed while waiting for the lock, so only those still Diterima go.
+    let batal: Vec<i32> = lock_statuses(&mut tx, &calon)
+        .await?
+        .into_iter()
+        .filter(|(_, status)| status == "Diterima")
+        .map(|(id, _)| id)
+        .collect();
+
+    sqlx::query(
+        "WITH sekarang AS (
+             SELECT clock_timestamp() AT TIME ZONE 'Asia/Jakarta' AS waktu
+         ), lama AS (
+             SELECT id_status FROM status_pendaftaran WHERE status = 'Diterima'
+         ), baru AS (
+             SELECT id_status FROM status_pendaftaran WHERE status = 'Batal/Mengundurkan Diri'
+         ), ubah AS (
+             UPDATE pendaftaran p
+             SET id_status = baru.id_status, updated_at = sekarang.waktu
+             FROM baru, sekarang
+             WHERE p.id_pendaftaran = ANY($1)
+         )
+         INSERT INTO log_status (id_pendaftaran, status_lama, status_baru, created_at)
+         SELECT id, lama.id_status, baru.id_status, sekarang.waktu
+         FROM unnest($1::int[]) AS id, lama, baru, sekarang",
+    )
+    .bind(&batal)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(batal)
+}
+
+/// Lokasi dan pemilik sebuah berkas pendaftaran: nama berkas di server, jenis berkas, id pengguna
+/// pemilik, dan NIM-nya. Mengembalikan `None` bila berkas tidak ada.
 pub async fn find_berkas(db: &PgPool, id_berkas: i32) -> Result<Option<LokasiBerkas>, sqlx::Error> {
     sqlx::query_as(
         "SELECT b.nama_berkas, b.jenis_berkas, p.id_pengguna, m.nim::text AS nim

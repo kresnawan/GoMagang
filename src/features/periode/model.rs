@@ -15,6 +15,8 @@ pub enum StatusPeriode {
 }
 
 impl StatusPeriode {
+    /// Nama status seperti yang dipakai di API dan dihitung di query SQL: `belum_dimulai`,
+    /// `berlangsung`, atau `selesai`.
     pub fn as_str(self) -> &'static str {
         match self {
             StatusPeriode::BelumDimulai => "belum_dimulai",
@@ -87,6 +89,14 @@ pub struct NewPeriode {
 }
 
 impl CreatePeriode {
+    /// Memvalidasi body pembuatan periode dan mengubahnya menjadi [`NewPeriode`].
+    ///
+    /// - `catatan`: spasi di awal dan akhir dibuang; teks kosong dianggap tidak ada; maksimal 255
+    ///   karakter.
+    /// - `waktu_mulai` dan `waktu_tutup`: format ISO 8601 dengan zona waktu (lihat [`parse_time`]).
+    /// - `waktu_tutup` harus setelah `waktu_mulai`.
+    ///
+    /// Pelanggaran dijawab [`AppError::Validation`].
     pub fn validate(self) -> Result<NewPeriode, AppError> {
         let catatan = self
             .catatan
@@ -115,6 +125,11 @@ impl CreatePeriode {
     }
 }
 
+/// Membaca waktu berformat RFC 3339 / ISO 8601 yang wajib menyertakan zona waktu, misalnya
+/// `2026-10-01T08:00:00+07:00`.
+///
+/// Zona waktu diwajibkan agar waktu yang dikirim frontend tidak ditafsirkan berbeda oleh server.
+/// Format lain dijawab [`AppError::Validation`] dengan contoh format yang benar.
 fn parse_time(value: &str) -> Result<OffsetDateTime, AppError> {
     OffsetDateTime::parse(value, &Rfc3339).map_err(|_| {
         AppError::Validation(

@@ -17,7 +17,8 @@ use super::{
         PendaftaranRingkas, SimpanJadwal, SimpanPlotting, SimpanTahapResult, StatusQuery,
         UpdateStatus, UpdateStatusResult,
     },
-    notifikasi, repository, storage,
+    notifikasi::{self, Pengubah},
+    repository, storage,
     tautan::MASA_BERLAKU,
 };
 use crate::{
@@ -31,7 +32,13 @@ use crate::{
 
 const SUDAH_AKTIF: &str = "Kamu sudah memiliki pendaftaran yang aktif.";
 
-/// Everything for Panitia Magang, and only their own for a mahasiswa.
+/// `GET /api/v1/pendaftaran`: daftar pendaftaran per halaman, dari yang paling baru.
+///
+/// Panitia Magang melihat semua pendaftaran, sedangkan mahasiswa hanya pendaftarannya sendiri.
+/// Filter opsional: `periode`, `status`, `perusahaan`, `posisi`, dan `s` (pencarian nama
+/// mahasiswa).
+/// Halaman diatur dengan `p` dan `r`. Respons memuat data halaman ini beserta `total` dan
+/// `total_pages` untuk filter yang sama. Pengguna tanpa peran dijawab `403`.
 pub async fn list(
     State(state): State<AppState>,
     user: User,
@@ -56,7 +63,10 @@ pub async fn list(
     Ok(Json(DaftarPendaftaran::new(data, halaman, total)))
 }
 
-/// Looks up one pendaftaran, whoever it belongs to.
+/// Mencari satu pendaftaran berdasarkan id, milik siapa pun, dengan query yang sama seperti daftar
+/// pendaftaran tanpa batas halaman.
+///
+/// Pemeriksaan hak akses menjadi tanggung jawab pemanggil.
 async fn find_ringkas(
     state: &AppState,
     id_pendaftaran: i32,
@@ -69,6 +79,12 @@ async fn find_ringkas(
     Ok(repository::list(&state.db, &filter, None).await?.pop())
 }
 
+/// `GET /api/v1/pendaftaran/{id}`: detail lengkap satu pendaftaran.
+///
+/// Isinya data pendaftaran, data diri mahasiswa, berkas, riwayat status, jadwal seleksi, surat
+/// keterangan, dan plotting DPM. Panitia Magang bisa melihat pendaftaran mana pun; mahasiswa hanya
+/// miliknya sendiri, dan pendaftaran orang lain dijawab `403`. Pendaftaran yang tidak ada dijawab
+/// `404`.
 pub async fn detail(
     State(state): State<AppState>,
     user: User,
@@ -89,6 +105,15 @@ pub async fn detail(
     Ok(Json(load_detail(&state, ringkas).await?))
 }
 
+/// `PATCH /api/v1/pendaftaran?id=...`: Panitia Magang mengubah status satu pendaftaran.
+///
+/// Status baru harus dikenal (`422`) dan perubahannya harus diizinkan (lihat
+/// [`panitia_magang_can_change`](super::model::panitia_magang_can_change)); bila tidak, dijawab
+/// `409`. Pendaftaran yang tidak ada dijawab `404`.
+///
+/// Bila berhasil, mahasiswa pemilik pendaftaran dikirimi email pemberitahuan di latar belakang,
+/// dan detail pendaftaran terbaru dikembalikan. Untuk status `Diterima`, email memuat tenggat
+/// konfirmasi 1 x 12 jam.
 pub async fn update_status(
     State(state): State<AppState>,
     user: User,
@@ -111,14 +136,24 @@ pub async fn update_status(
     state.email.kirim(notifikasi::perubahan_status(
         &detail,
         &status_lama,
+        Pengubah::PanitiaMagang,
         &state.frontend_url,
     ));
 
     Ok(Json(detail))
 }
 
-/// The mahasiswa takes up a place they were accepted for, and withdraws from their other running
-/// pendaftaran.
+/// `PATCH /api/v1/pendaftaran/accept?id=...`: mahasiswa mengonfirmasi penerimaan.
+///
+/// Pendaftaran yang dikonfirmasi menjadi `Aktif`, dan pendaftaran lain milik mahasiswa itu yang
+/// masih
+/// berjalan menjadi `Batal/Mengundurkan Diri`. Error yang mungkin:
+/// - `404`: pendaftaran tidak ada.
+/// - `403`: pendaftaran milik mahasiswa lain.
+/// - `409`: status bukan `Diterima`, mahasiswa sudah punya pendaftaran `Aktif`, atau tenggat
+///   konfirmasi 12 jam sudah lewat.
+///
+/// Bila berhasil, detail pendaftaran terbaru dikembalikan.
 pub async fn accept(
     State(state): State<AppState>,
     user: User,
@@ -134,11 +169,22 @@ pub async fn accept(
             ));
         }
         AcceptResult::HasAktif => return Err(AppError::Conflict(SUDAH_AKTIF)),
+        AcceptResult::Kedaluwarsa => {
+            return Err(AppError::Conflict(
+                "Batas waktu konfirmasi 1 x 12 jam sudah lewat, sehingga pendaftaran ini dibatalkan.",
+            ));
+        }
     }
 
     Ok(Json(load_changed_detail(&state, query.id).await?))
 }
 
+/// `PUT /api/v1/pendaftaran/jadwal-seleksi-substansi`: Panitia Magang menyimpan satu jadwal seleksi
+/// substansi untuk satu atau banyak pendaftaran sekaligus.
+///
+/// Semua pendaftaran harus ada (`404`) dan berstatus `Lolos Seleksi Administrasi` (`409`). Bila ada
+/// satu saja yang tidak memenuhi, tidak ada yang disimpan. Jadwal yang sudah ada diganti. Bila
+/// berhasil, data yang tersimpan dikembalikan.
 pub async fn simpan_jadwal(
     State(state): State<AppState>,
     Json(data): Json<SimpanJadwal>,
@@ -154,6 +200,12 @@ pub async fn simpan_jadwal(
     }
 }
 
+/// `PUT /api/v1/pendaftaran/plot-dpm`: Panitia Magang menyimpan satu DPM (Dosen Pembimbing Magang)
+/// untuk satu atau banyak pendaftaran sekaligus.
+///
+/// Semua pendaftaran harus ada (`404`) dan berstatus `Aktif` (`409`). Bila ada satu saja yang tidak
+/// memenuhi, tidak ada yang disimpan. Plotting yang sudah ada diganti. Bila berhasil, data yang
+/// tersimpan dikembalikan.
 pub async fn simpan_plotting(
     State(state): State<AppState>,
     Json(data): Json<SimpanPlotting>,
@@ -169,8 +221,17 @@ pub async fn simpan_plotting(
     }
 }
 
-/// Sends the pendaftaran picked by Panitia Magang as a file, in the order of the list, with a public link
-/// to each of their files.
+/// `POST /api/v1/pendaftaran/ekspor`: Panitia Magang mengekspor pendaftaran pilihan menjadi berkas
+/// Excel.
+///
+/// Baris mengikuti urutan pada daftar pendaftaran. Setiap berkas pendaftaran diberi tautan publik
+/// bertanda tangan yang berlaku selama [`MASA_BERLAKU`] (30 hari), karena berkas Excel ini
+/// ditujukan
+/// untuk pihak luar (perusahaan mitra, kaprodi) yang tidak login. Bila ada id yang tidak ditemukan,
+/// dijawab `404`.
+///
+/// Penyusunan berkas dijalankan di thread terpisah (`spawn_blocking`) karena berat di CPU. Respons
+/// diberi header `Cache-Control: private, no-store` karena memuat data pribadi mahasiswa.
 pub async fn ekspor(
     State(state): State<AppState>,
     Json(data): Json<Ekspor>,
@@ -226,7 +287,12 @@ pub async fn ekspor(
     Ok((headers, isi))
 }
 
-async fn load_changed_detail(
+/// Memuat detail pendaftaran yang baru saja diubah, misalnya setelah perubahan status.
+///
+/// Pendaftaran itu seharusnya pasti ada; bila tidak ditemukan, dijawab [`AppError::Internal`],
+/// bukan
+/// `404`.
+pub(super) async fn load_changed_detail(
     state: &AppState,
     id_pendaftaran: i32,
 ) -> Result<PendaftaranDetail, AppError> {
@@ -237,6 +303,8 @@ async fn load_changed_detail(
     load_detail(state, ringkas).await
 }
 
+/// Melengkapi ringkasan pendaftaran menjadi detail: data diri pemilik, berkas, riwayat status,
+/// jadwal seleksi, surat keterangan, dan plotting DPM.
 async fn load_detail(
     state: &AppState,
     ringkas: PendaftaranRingkas,
@@ -262,6 +330,24 @@ async fn load_detail(
     })
 }
 
+/// `POST /api/v1/pendaftaran`: mahasiswa mendaftar ke sebuah posisi magang dengan mengunggah
+/// berkas.
+///
+/// Syarat pendaftaran:
+/// - Data diri sudah lengkap (`422`).
+/// - Posisi ada dan tidak disembunyikan, termasuk perusahaannya (`422`), dan periodenya sedang
+///   berlangsung (`409`).
+/// - Mahasiswa belum punya pendaftaran `Aktif` (`409`).
+/// - Tidak ada pendaftaran yang masih berjalan di posisi yang sama (`409`).
+/// - Belum mendaftar 2 kali di periode yang sama, termasuk pendaftaran yang batal, tidak lolos,
+///   atau
+///   selesai (`409`).
+///
+/// Body multipart dibaca sebelum transaksi dimulai, agar unggahan yang lambat tidak menahan kunci.
+/// Mahasiswa dikunci selama pemeriksaan, sehingga dua request bersamaan tidak bisa sama-sama lolos
+/// batas jumlah. Berkas ditulis ke disk paling akhir: bila gagal, transaksi dibatalkan, dan bila
+/// commit gagal, berkas dihapus lagi. Bila berhasil, dijawab `201` beserta pendaftaran dan
+/// berkasnya.
 pub async fn create(
     State(state): State<AppState>,
     user: User,
@@ -327,7 +413,11 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(pendaftaran)))
 }
 
-/// Sends a file to the mahasiswa who uploaded it, or to Panitia Magang.
+/// `GET /api/v1/berkas/{id_berkas}`: mengunduh berkas pendaftaran dengan login.
+///
+/// Mahasiswa hanya bisa mengunduh berkas yang ia unggah sendiri (`403` untuk milik orang lain),
+/// sedangkan Panitia Magang bisa mengunduh semua berkas. Berkas dikirim sebagai lampiran PDF dengan
+/// header `Cache-Control: private, no-store`.
 pub async fn download_berkas(
     State(state): State<AppState>,
     user: User,
@@ -361,8 +451,15 @@ pub async fn download_berkas(
     Ok((headers, isi))
 }
 
-/// Sends a file to anyone holding a link from an export, without logging in, until the link
-/// expires. A link that is changed, expired, or made elsewhere is a 404, like a missing file.
+/// `GET /api/v1/berkas/publik/{token}`: mengunduh berkas lewat tautan publik dari hasil ekspor,
+/// tanpa login.
+///
+/// Tautan berlaku sampai kedaluwarsa. Token yang diubah, kedaluwarsa, atau dibuat di tempat lain
+/// dijawab `404`, sama seperti berkas yang tidak ada, sehingga tidak ada informasi yang bocor.
+///
+/// Berkas ditampilkan langsung di browser (`inline`) dengan nama yang mudah dibaca, misalnya
+/// `cv-225150200111001.pdf`, bukan nama berkas di server. Header `X-Robots-Tag: noindex` mencegah
+/// tautan diindeks mesin pencari.
 pub async fn download_berkas_publik(
     State(state): State<AppState>,
     Path(token): Path<String>,
@@ -402,6 +499,10 @@ pub async fn download_berkas_publik(
     Ok((headers, isi))
 }
 
+/// Membaca isi berkas dari folder upload.
+///
+/// Berkas yang hilang dari disk dijawab `404`; error baca lain dicatat ke log dan dijawab
+/// [`AppError::Internal`].
 async fn baca_berkas(
     state: &AppState,
     id_berkas: i32,

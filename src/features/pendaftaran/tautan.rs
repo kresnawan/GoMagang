@@ -19,8 +19,12 @@ pub struct TautanBerkas {
 }
 
 impl TautanBerkas {
-    /// The key is derived from `secret` for links only, so a link can never pass for anything
-    /// else signed with the same secret, such as a session token.
+    /// Membuat pembuat tautan publik dari `secret` (nilai `JWT_SECRET`).
+    ///
+    /// Kunci HMAC untuk tautan diturunkan dari secret dengan konteks khusus, sehingga tanda tangan
+    /// tautan tidak pernah bisa disalahgunakan sebagai tanda tangan lain yang memakai secret yang
+    /// sama,
+    /// misalnya token sesi.
     pub fn new(secret: &str) -> Self {
         let induk = hmac::Key::new(hmac::HMAC_SHA256, secret.as_bytes());
         let turunan = hmac::sign(&induk, KONTEKS_KUNCI);
@@ -29,14 +33,25 @@ impl TautanBerkas {
         }
     }
 
-    /// A token for this file that works until `kedaluwarsa`, in Unix seconds.
+    /// Membuat token tautan untuk berkas `id_berkas` yang berlaku sampai `kedaluwarsa` (detik
+    /// Unix).
+    ///
+    /// Format token: `{id_berkas}.{kedaluwarsa}.{tag}`, dengan tag berupa HMAC-SHA256 atas dua
+    /// bagian
+    /// pertama dalam base64url tanpa padding.
     pub fn buat(&self, id_berkas: i32, kedaluwarsa: i64) -> String {
         let isi = format!("{id_berkas}.{kedaluwarsa}");
         let tag = hmac::sign(&self.key, isi.as_bytes());
         format!("{isi}.{}", URL_SAFE_NO_PAD.encode(tag.as_ref()))
     }
 
-    /// The id_berkas, if the token was made here, is unchanged, and has not expired at `sekarang`.
+    /// Membaca token tautan dan mengembalikan `id_berkas` bila token sah pada waktu `sekarang`
+    /// (detik
+    /// Unix).
+    ///
+    /// Token sah bila dibuat oleh server ini, tidak diubah sedikit pun, dan belum kedaluwarsa.
+    /// Selain
+    /// itu, termasuk format yang rusak, hasilnya `None`.
     pub fn baca(&self, token: &str, sekarang: i64) -> Option<i32> {
         let (isi, tag) = token.rsplit_once('.')?;
         let tag = URL_SAFE_NO_PAD.decode(tag).ok()?;

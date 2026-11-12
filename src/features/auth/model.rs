@@ -49,6 +49,11 @@ pub struct AccessClaims {
 impl TryFrom<AccessClaims> for User {
     type Error = std::num::ParseIntError;
 
+    /// Mengubah klaim access token (JWT) menjadi [`User`].
+    ///
+    /// Field `sub` pada JWT wajib berupa teks, sehingga `id_pengguna` disimpan sebagai string dan
+    /// diubah kembali menjadi angka di sini. Gagal bila `sub` bukan angka, misalnya pada token yang
+    /// dibuat oleh pihak lain.
     fn try_from(claims: AccessClaims) -> Result<Self, Self::Error> {
         Ok(Self {
             id_pengguna: claims.sub.parse()?,

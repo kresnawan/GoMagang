@@ -21,7 +21,11 @@ pub struct RotatedToken {
     pub expires_in: Duration,
 }
 
-/// Saves the pengguna, and makes sure it has a mahasiswa row without touching existing data.
+/// Menyimpan akun mahasiswa yang login dan memastikan baris `mahasiswa`-nya ada.
+///
+/// Pengguna dicari berdasarkan `google_sub` (ID akun Google yang tidak pernah berubah). Bila sudah
+/// ada, hanya email yang diperbarui. Baris `mahasiswa` dibuat kosong bila belum ada, tanpa
+/// menyentuh data diri yang sudah diisi. Keduanya dilakukan dalam satu transaksi.
 pub async fn upsert_mahasiswa(db: &PgPool, claims: &GoogleClaims) -> Result<User, sqlx::Error> {
     let mut tx = db.begin().await?;
 
@@ -47,10 +51,16 @@ pub async fn upsert_mahasiswa(db: &PgPool, claims: &GoogleClaims) -> Result<User
     Ok(user)
 }
 
-/// Finds the Panitia Magang member with this email, and ties the row to the Google account on first login.
+/// Mencari anggota Panitia Magang dengan email ini dan mengikatnya ke akun Google pada login
+/// pertama.
 ///
-/// Returns `None` if the email isn't registered in panitia_magang, or if another Google account already
-/// claimed the row.
+/// Panitia Magang didaftarkan lebih dulu hanya dengan email, sehingga `google_sub`-nya masih
+/// kosong.
+/// Pada login pertama, `google_sub` diisi dengan ID akun Google. Login berikutnya hanya diterima
+/// dari akun Google yang sama. Email dibandingkan tanpa membedakan huruf besar-kecil.
+///
+/// Mengembalikan `None` bila email tidak terdaftar di `panitia_magang`, atau baris itu sudah
+/// diklaim oleh akun Google lain.
 pub async fn find_panitia_magang(
     db: &PgPool,
     claims: &GoogleClaims,
@@ -70,7 +80,11 @@ pub async fn find_panitia_magang(
     .await
 }
 
-/// Who this pengguna is, going by the table their row is in. Panitia Magang wins if they are in both.
+/// Menentukan peran pengguna dari tabel tempat barisnya berada.
+///
+/// Mengembalikan [`Peran::PanitiaMagang`] bila ada di tabel `panitia_magang` (peran ini menang bila
+/// pengguna kebetulan ada di kedua tabel), [`Peran::Mahasiswa`] bila hanya ada di tabel
+/// `mahasiswa`, dan `None` bila tidak punya peran sama sekali.
 pub async fn find_peran(db: &PgPool, id_pengguna: i32) -> Result<Option<Peran>, sqlx::Error> {
     let (panitia_magang, mahasiswa): (bool, bool) = sqlx::query_as(
         "SELECT EXISTS (SELECT 1 FROM panitia_magang WHERE id_pengguna = $1),
@@ -87,6 +101,10 @@ pub async fn find_peran(db: &PgPool, id_pengguna: i32) -> Result<Option<Peran>, 
     })
 }
 
+/// Menyimpan refresh token baru sebagai awal keluarga token baru.
+///
+/// Setiap login membuat satu keluarga (`id_keluarga` acak). Token disimpan dalam bentuk hash,
+/// dengan masa berlaku `ttl` yang dihitung dari jam database.
 pub async fn create_refresh_token(
     db: &PgPool,
     id_pengguna: i32,
@@ -106,11 +124,17 @@ pub async fn create_refresh_token(
     Ok(())
 }
 
-/// Swaps a refresh token for a new one in the same family, which keeps the family's expiry.
+/// Menukar refresh token dengan token baru di keluarga yang sama.
 ///
-/// A token that was already rotated is accepted again within `grace`, so tabs refreshing at the
-/// same time don't log each other out. After that, its use means the token leaked, so the whole
-/// family is revoked. Returns `None` if the token can't be used.
+/// Token baru mewarisi `expires_at` keluarganya, sehingga rotasi tidak memperpanjang sesi. Token
+/// lama ditandai `rotated_at`, dan baris token dikunci agar request bersamaan dengan token yang
+/// sama diproses satu per satu.
+///
+/// Token yang sudah dirotasi masih diterima dalam selang `grace`. Ini supaya beberapa tab yang
+/// me-refresh bersamaan tidak saling membuat logout. Lewat dari itu, pemakaian ulang dianggap
+/// tanda token bocor, sehingga seluruh keluarga dihapus.
+///
+/// Mengembalikan `None` bila token tidak dikenal, kedaluwarsa, atau terdeteksi dipakai ulang.
 pub async fn rotate_refresh_token(
     db: &PgPool,
     token_hash: &[u8],
@@ -179,6 +203,10 @@ pub async fn rotate_refresh_token(
     }))
 }
 
+/// Menghapus seluruh keluarga refresh token yang memuat token dengan hash ini.
+///
+/// Dipakai saat logout, sehingga semua token hasil rotasi dari login yang sama ikut tidak berlaku.
+/// Token yang tidak dikenal diabaikan tanpa error.
 pub async fn revoke_family(db: &PgPool, token_hash: &[u8]) -> Result<(), sqlx::Error> {
     sqlx::query(
         "DELETE FROM token_refresh
@@ -191,6 +219,7 @@ pub async fn revoke_family(db: &PgPool, token_hash: &[u8]) -> Result<(), sqlx::E
     Ok(())
 }
 
+/// Menghapus refresh token yang sudah kedaluwarsa, dan mengembalikan jumlah baris yang terhapus.
 pub async fn delete_expired_tokens(db: &PgPool) -> Result<u64, sqlx::Error> {
     let result = sqlx::query("DELETE FROM token_refresh WHERE expires_at <= now()")
         .execute(db)
@@ -199,6 +228,11 @@ pub async fn delete_expired_tokens(db: &PgPool) -> Result<u64, sqlx::Error> {
     Ok(result.rows_affected())
 }
 
+/// Menjalankan pembersihan refresh token kedaluwarsa di latar belakang setiap
+/// `CLEANUP_INTERVAL` (1 jam).
+///
+/// Putaran pertama langsung berjalan saat server start. Kegagalan hanya dicatat ke log, dan
+/// pembersihan dicoba lagi pada putaran berikutnya.
 pub fn spawn_token_cleanup(db: PgPool) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(CLEANUP_INTERVAL);

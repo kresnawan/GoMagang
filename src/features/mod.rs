@@ -1,5 +1,4 @@
 pub mod auth;
-mod data_uji_coba;
 mod konversi_mk;
 mod mahasiswa;
 mod panitia_magang;
@@ -14,6 +13,11 @@ use axum::Router;
 
 use crate::state::AppState;
 
+/// Menggabungkan router semua fitur yang dipasang di bawah `/api/v1`.
+///
+/// `state` diteruskan ke fitur yang memasang middleware autentikasi (misalnya
+/// `require_panitia_magang` atau `require_mahasiswa`), karena middleware tersebut membutuhkan
+/// pengelola sesi dan database.
 pub fn routes(state: &AppState) -> Router<AppState> {
     Router::new()
         .merge(pendaftaran::routes(state))
@@ -25,5 +29,4 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         .merge(konversi_mk::routes(state))
         .merge(templat_sp_dpa::routes(state))
         .merge(panitia_magang::routes(state))
-        .merge(data_uji_coba::routes(state))
 }

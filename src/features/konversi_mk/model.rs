@@ -32,11 +32,20 @@ pub struct MataKuliahBaru {
     pub sks: i32,
 }
 
+/// Mengecek apakah nama mata kuliah berisi 1-255 karakter. Nama dianggap sudah dirapikan oleh
+/// pemanggil.
 fn nama_valid(nama: &str) -> bool {
     !nama.is_empty() && nama.chars().count() <= MAX_NAMA_LEN
 }
 
 impl MataKuliahBaru {
+    /// Memvalidasi dan merapikan body penambahan mata kuliah.
+    ///
+    /// - `mk_asal` dan `mk_konversi`: spasi di awal dan akhir dibuang, lalu harus berisi 1-255
+    ///   karakter.
+    /// - `sks`: 1 sampai 24.
+    ///
+    /// Pelanggaran dijawab [`AppError::Validation`] dengan pesan untuk pengguna.
     pub fn validate(mut self) -> Result<Self, AppError> {
         self.mk_asal = self.mk_asal.trim().to_string();
         self.mk_konversi = self.mk_konversi.trim().to_string();

@@ -29,7 +29,11 @@ pub struct Mahasiswa {
 }
 
 impl Mahasiswa {
-    /// Whether every data diri column has been filled in, as registering for a position requires.
+    /// Mengecek apakah semua kolom data diri sudah terisi.
+    ///
+    /// Mendaftar ke posisi magang mensyaratkan NIM, nama, program studi, IPK, nomor HP, jenis
+    /// kelamin,
+    /// dan semester sudah diisi semuanya. Email tidak dicek karena selalu ada dari akun Google.
     pub fn is_lengkap(&self) -> bool {
         self.nim.is_some()
             && self.nama.is_some()
@@ -64,6 +68,11 @@ pub struct MahasiswaPatch {
     pub semester: Option<i16>,
 }
 
+/// Deserializer serde untuk field opsional pada [`MahasiswaPatch`].
+///
+/// Field yang tidak dikirim tetap bernilai `None` lewat `#[serde(default)]`, sedangkan field yang
+/// dikirim selalu menjadi `Some`. Akibatnya, nilai `null` ditolak sebagai error tipe, alih-alih
+/// diam-diam dianggap "tidak diubah".
 fn present<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<T>, D::Error> {
@@ -71,6 +80,21 @@ fn present<'de, T: Deserialize<'de>, D: Deserializer<'de>>(
 }
 
 impl MahasiswaPatch {
+    /// Memvalidasi dan merapikan perubahan data diri sebelum disimpan.
+    ///
+    /// Aturan untuk setiap field yang dikirim:
+    /// - `nim`: 1-15 digit angka.
+    /// - `nama`: 1-255 karakter setelah spasi di awal dan akhir dibuang; nilai yang sudah dirapikan
+    ///   itu
+    ///   yang disimpan.
+    /// - `program_studi`: salah satu dari lima program studi di [`PROGRAM_STUDI`].
+    /// - `ipk`: 0 sampai 4.
+    /// - `no_hp`: 9-15 digit angka, boleh diawali `+`.
+    /// - `jenis_kelamin`: `L` atau `P`.
+    /// - `semester`: 1 sampai 14.
+    ///
+    /// Pelanggaran pertama yang ditemukan dijawab [`AppError::Validation`] dengan pesan untuk
+    /// pengguna.
     pub fn validate(mut self) -> Result<Self, AppError> {
         if let Some(nim) = &self.nim
             && !(is_digits(nim) && nim.len() <= MAX_NIM_LEN)
@@ -117,6 +141,7 @@ impl MahasiswaPatch {
     }
 }
 
+/// Mengecek apakah teks tidak kosong dan hanya berisi digit ASCII `0`-`9`.
 fn is_digits(value: &str) -> bool {
     !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
 }

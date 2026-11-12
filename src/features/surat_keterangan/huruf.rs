@@ -12,6 +12,9 @@ pub enum Huruf {
 }
 
 impl Huruf {
+    /// Lebar satu karakter (kode WinAnsiEncoding) dalam satuan seperseribu ukuran font, diambil
+    /// dari
+    /// tabel metrik font. Kode di bawah 32 atau tanpa glyph bernilai 0.
     fn lebar_kode(self, kode: u8) -> u16 {
         let tabel = match self {
             Huruf::Biasa => &TIMES_ROMAN,
@@ -20,7 +23,10 @@ impl Huruf {
         kode.checked_sub(32).map_or(0, |i| tabel[usize::from(i)])
     }
 
-    /// Width of already encoded text, in points.
+    /// Lebar teks yang sudah di-encode (lihat [`Huruf::encode`]), dalam point, pada ukuran font
+    /// `ukuran`.
+    ///
+    /// Dipakai untuk meratakan teks ke tengah dan memecah paragraf sesuai lebar halaman.
     pub fn lebar(self, teks: &[u8], ukuran: f32) -> f32 {
         let total: u32 = teks
             .iter()
@@ -29,8 +35,10 @@ impl Huruf {
         total as f32 * ukuran / 1000.0
     }
 
-    /// Encodes for WinAnsiEncoding. A character the font cannot show becomes "?", so the text
-    /// stays readable instead of silently losing letters.
+    /// Mengubah teks menjadi byte WinAnsiEncoding yang dipakai font standar PDF.
+    ///
+    /// Karakter yang tidak bisa ditampilkan font diganti `?`, sehingga teks tetap terbaca alih-alih
+    /// kehilangan huruf tanpa jejak.
     pub fn encode(self, teks: &str) -> Vec<u8> {
         teks.chars()
             .map(|c| match win_ansi(c) {
@@ -40,9 +48,14 @@ impl Huruf {
             .collect()
     }
 
-    /// Splits text into lines no wider than `maks`, breaking at plain spaces only, so a
-    /// non-breaking space keeps its neighbours together. A single word wider than that keeps its
-    /// own line rather than being cut.
+    /// Memecah teks menjadi baris-baris yang lebarnya tidak melebihi `maks` point pada ukuran font
+    /// `ukuran`.
+    ///
+    /// Pemisahan hanya terjadi di spasi biasa, sehingga spasi tak terputus (non-breaking space)
+    /// menjaga kata di sekitarnya tetap satu baris, misalnya pada tanggal. Kata tunggal yang lebih
+    /// lebar
+    /// dari `maks` ditaruh di barisnya sendiri, bukan dipotong. Hasilnya berupa baris yang sudah
+    /// di-encode.
     pub fn pecah_baris(self, teks: &str, ukuran: f32, maks: f32) -> Vec<Vec<u8>> {
         let spasi = self.lebar(b" ", ukuran);
         let mut baris: Vec<Vec<u8>> = Vec::new();
@@ -70,7 +83,10 @@ impl Huruf {
     }
 }
 
-/// WinAnsiEncoding (Windows-1252): Latin-1 except 0x80-0x9F, which hold typographic characters.
+/// Kode WinAnsiEncoding (Windows-1252) untuk karakter `c`, atau `None` bila tidak ada.
+///
+/// Sama dengan Latin-1, kecuali rentang `0x80`-`0x9F` yang berisi karakter tipografi seperti tanda
+/// kutip melengkung, elipsis, dan tanda pisah.
 fn win_ansi(c: char) -> Option<u8> {
     let kode = u32::from(c);
     match kode {

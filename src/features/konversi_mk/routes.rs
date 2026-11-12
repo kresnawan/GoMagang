@@ -10,6 +10,12 @@ use crate::{
     state::AppState,
 };
 
+/// Router endpoint konversi mata kuliah.
+///
+/// - `GET /mata-kuliah` dan `GET /pendaftaran/{id}/penyetaraan-mk`: semua pengguna yang login
+///   (aturan per peran ada di handler).
+/// - `POST /mata-kuliah` dan `DELETE /mata-kuliah/{id}`: hanya Panitia Magang.
+/// - `POST /pendaftaran/{id}/penyetaraan-mk` dan `DELETE /penyetaraan-mk/{id}`: hanya mahasiswa.
 pub fn routes(state: &AppState) -> Router<AppState> {
     let create_mk = post(handler::create_mk)
         .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));

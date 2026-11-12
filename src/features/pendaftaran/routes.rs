@@ -11,6 +11,17 @@ use crate::{
     state::AppState,
 };
 
+/// Router endpoint pendaftaran dan berkas.
+///
+/// - `GET /pendaftaran` dan `GET /pendaftaran/{id}`: mahasiswa dan Panitia Magang (aturan per peran
+///   ada di handler).
+/// - `POST /pendaftaran`: hanya mahasiswa, dengan batas ukuran body
+///   `MAX_BODY_SIZE` untuk unggahan berkas.
+/// - `PATCH /pendaftaran/accept`: hanya mahasiswa (konfirmasi penerimaan).
+/// - `PATCH /pendaftaran`, `PUT /pendaftaran/jadwal-seleksi-substansi`,
+///   `PUT /pendaftaran/plot-dpm`, dan `POST /pendaftaran/ekspor`: hanya Panitia Magang.
+/// - `GET /berkas/{id_berkas}`: unduh berkas dengan login.
+/// - `GET /berkas/publik/{token}`: unduh berkas lewat tautan publik bertanda tangan, tanpa login.
 pub fn routes(state: &AppState) -> Router<AppState> {
     let create = post(handler::create)
         .route_layer(DefaultBodyLimit::max(MAX_BODY_SIZE))

@@ -34,6 +34,10 @@ pub struct NamaPerusahaan {
 }
 
 impl NamaPerusahaan {
+    /// Merapikan dan memvalidasi nama perusahaan.
+    ///
+    /// Spasi di awal dan akhir dibuang, lalu nama harus berisi 1-255 karakter. Nama yang sudah
+    /// dirapikan itu yang disimpan. Pelanggaran dijawab [`AppError::Validation`].
     pub fn validate(mut self) -> Result<Self, AppError> {
         self.nama_perusahaan = self.nama_perusahaan.trim().to_string();
         if self.nama_perusahaan.is_empty() || self.nama_perusahaan.chars().count() > MAX_NAMA_LEN {

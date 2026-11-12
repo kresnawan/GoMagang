@@ -8,6 +8,15 @@ use crate::{error::AppError, state::AppState};
 
 const EMAIL_TAKEN: &str = "Email sudah terdaftar.";
 
+/// `POST /api/v1/panitia-magang`: mendaftarkan anggota Panitia Magang baru (endpoint sementara).
+///
+/// Hanya bisa dipanggil dengan header `X-Admin-Secret` yang benar. Email harus alamat `@gmail.com`
+/// dan dibandingkan tanpa membedakan huruf besar-kecil. Anggota yang didaftarkan baru bisa login
+/// setelah ini, dan akun Google-nya diikat pada login pertama.
+///
+/// Dijawab `201` beserta data yang tersimpan. Email yang sudah dipakai pengguna mana pun dijawab
+/// `409`, termasuk bila dua request dengan email yang sama datang bersamaan dan keduanya lolos
+/// pengecekan awal; dalam kasus itu, constraint unik di database yang menangkapnya.
 pub async fn register(
     State(state): State<AppState>,
     Json(data): Json<RegisterPanitiaMagang>,

@@ -22,7 +22,13 @@ pub struct SimpanTemplat {
 }
 
 impl SimpanTemplat {
-    /// Accepts only a full http or https link, so that it can be opened from the frontend as is.
+    /// Memvalidasi tautan templat.
+    ///
+    /// Spasi di awal dan akhir dibuang, lalu tautan harus berisi 1-255 karakter (sesuai panjang
+    /// kolom)
+    /// dan berupa URL lengkap `http://` atau `https://` dengan host, tanpa spasi. Dengan begitu
+    /// tautan
+    /// bisa langsung dibuka dari frontend. Pelanggaran dijawab [`AppError::Validation`].
     pub fn validate(mut self) -> Result<Self, AppError> {
         self.tautan_templat = self.tautan_templat.trim().to_string();
 

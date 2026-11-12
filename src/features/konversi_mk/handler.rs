@@ -20,7 +20,11 @@ use crate::{
 const BUKAN_AKTIF: AppError =
     AppError::Conflict("Konversi mata kuliah hanya untuk pendaftaran berstatus Aktif.");
 
-/// The mata kuliah that are not hidden. Panitia Magang may ask for the hidden ones too.
+/// `GET /api/v1/mata-kuliah`: katalog mata kuliah konversi.
+///
+/// Secara default hanya mata kuliah yang tidak disembunyikan yang dikembalikan. Panitia Magang
+/// boleh meminta yang disembunyikan juga dengan `termasuk_dihapus=true`; permintaan itu dari
+/// mahasiswa dijawab `403`. Pengguna tanpa peran juga dijawab `403`.
 pub async fn list_mk(
     State(state): State<AppState>,
     user: User,
@@ -40,6 +44,11 @@ pub async fn list_mk(
     ))
 }
 
+/// `POST /api/v1/mata-kuliah`: menambah mata kuliah ke katalog (hanya Panitia Magang).
+///
+/// Body divalidasi lebih dulu (lihat [`MataKuliahBaru::validate`]). Pasangan MK asal dan MK
+/// konversi yang sudah ada di mata kuliah lain yang tidak disembunyikan, tanpa membedakan huruf
+/// besar-kecil, dijawab `409`. Bila berhasil, dijawab `201`.
 pub async fn create_mk(
     State(state): State<AppState>,
     Json(data): Json<MataKuliahBaru>,
@@ -55,7 +64,12 @@ pub async fn create_mk(
     Ok((StatusCode::CREATED, Json(mata_kuliah)))
 }
 
-/// Hides the mata kuliah. Its row stays, so the penyetaraan that chose it keep their history.
+/// `DELETE /api/v1/mata-kuliah/{id}`: menyembunyikan mata kuliah dari katalog (soft delete, hanya
+/// Panitia Magang).
+///
+/// Baris mata kuliah tetap ada dengan waktu disembunyikan di `deleted_at`, sehingga penyetaraan
+/// yang sudah memilihnya tetap punya riwayat. Mata kuliah yang disembunyikan tidak bisa dipilih
+/// lagi. Mata kuliah yang tidak ada atau sudah disembunyikan dijawab `404`.
 pub async fn soft_delete_mk(
     State(state): State<AppState>,
     Path(id_mk_konversi): Path<i32>,
@@ -67,7 +81,12 @@ pub async fn soft_delete_mk(
     Ok(Json(mata_kuliah))
 }
 
-/// The mata kuliah chosen for a pendaftaran: any for Panitia Magang, only their own for a mahasiswa.
+/// `GET /api/v1/pendaftaran/{id}/penyetaraan-mk`: mata kuliah yang dipilih untuk sebuah
+/// pendaftaran.
+///
+/// Panitia Magang bisa melihat pendaftaran mana pun, sedangkan mahasiswa hanya pendaftarannya
+/// sendiri; pendaftaran milik orang lain dijawab `403`. Pendaftaran yang tidak ada dijawab `404`.
+/// Mata kuliah yang sudah disembunyikan tetap muncul, karena sudah terlanjur dipilih.
 pub async fn list_penyetaraan(
     State(state): State<AppState>,
     user: User,
@@ -90,6 +109,12 @@ pub async fn list_penyetaraan(
     ))
 }
 
+/// `POST /api/v1/pendaftaran/{id}/penyetaraan-mk`: mahasiswa memilih mata kuliah untuk
+/// pendaftarannya.
+///
+/// Syaratnya: pendaftaran ada (`404`), milik mahasiswa ini (`403`), berstatus `Aktif` (`409`), dan
+/// mata kuliahnya ada serta tidak disembunyikan (`422`). Mata kuliah yang sudah dipilih sebelumnya
+/// dijawab `409`. Bila berhasil, dijawab `201` beserta penyetaraan baru.
 pub async fn tambah_penyetaraan(
     State(state): State<AppState>,
     user: User,
@@ -116,6 +141,10 @@ pub async fn tambah_penyetaraan(
     }
 }
 
+/// `DELETE /api/v1/penyetaraan-mk/{id}`: mahasiswa membatalkan pilihan mata kuliah.
+///
+/// Penyetaraan yang tidak ada dijawab `404`, milik mahasiswa lain `403`, dan pada pendaftaran yang
+/// tidak berstatus `Aktif` dijawab `409`. Bila berhasil, dijawab `204` tanpa body.
 pub async fn hapus_penyetaraan(
     State(state): State<AppState>,
     user: User,

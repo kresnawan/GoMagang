@@ -29,6 +29,13 @@ pub struct GoogleClient {
 }
 
 impl GoogleClient {
+    /// Membuat klien OAuth Google dari konfigurasi.
+    ///
+    /// Klien HTTP diberi batas waktu `REQUEST_TIMEOUT` (5 detik), sehingga Google yang lambat tidak
+    /// menahan proses login terlalu lama.
+    ///
+    /// # Panics
+    /// Panic bila klien HTTP gagal dibuat, misalnya karena backend TLS tidak tersedia.
     pub fn new(config: &Config) -> Self {
         let http = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -44,12 +51,19 @@ impl GoogleClient {
         }
     }
 
+    /// Mengganti URL token endpoint Google. Hanya untuk test, agar bisa diarahkan ke server tiruan.
     #[cfg(test)]
     pub fn with_token_url(mut self, token_url: String) -> Self {
         self.token_url = token_url;
         self
     }
 
+    /// Menyusun URL halaman login Google yang dituju browser.
+    ///
+    /// URL memuat client ID, redirect URI, `response_type=code`, scope `openid email`, dan
+    /// `prompt=select_account`, sehingga pengguna selalu bisa memilih akun. `state` adalah token
+    /// acak
+    /// yang juga disimpan di cookie, untuk mencegah CSRF pada callback.
     pub fn authorization_url(&self, state: &str) -> String {
         Url::parse_with_params(
             AUTH_URL,
@@ -66,6 +80,17 @@ impl GoogleClient {
         .into()
     }
 
+    /// Menukar authorization code dari callback Google dengan identitas pengguna.
+    ///
+    /// Code dikirim ke token endpoint Google bersama client secret. ID token yang diterima lalu
+    /// divalidasi (lihat `decode_claims`) dan jenis akunnya ditentukan dari domain email (lihat
+    /// `account_kind`).
+    ///
+    /// Error yang dikembalikan:
+    /// - [`AppError::ServiceUnavailable`]: Google tidak bisa dihubungi atau jawabannya tidak
+    ///   dikenali.
+    /// - [`AppError::Unauthorized`]: code ditolak Google, atau ID token tidak valid.
+    /// - [`AppError::Forbidden`]: email belum terverifikasi atau domainnya tidak diizinkan.
     pub async fn exchange_code(&self, code: &str) -> Result<(GoogleClaims, AccountKind), AppError> {
         let response = self
             .http
@@ -103,8 +128,12 @@ impl GoogleClient {
     }
 }
 
-// The ID token comes straight from Google's token endpoint over TLS, so OpenID Connect
-// allows skipping the signature check. The claims still have to be validated.
+/// Membaca dan memvalidasi klaim ID token dari Google.
+///
+/// Tanda tangan token tidak diperiksa. OpenID Connect mengizinkan hal ini karena token diterima
+/// langsung dari token endpoint Google lewat TLS, bukan dari browser. Klaimnya tetap divalidasi:
+/// `aud` harus sama dengan client ID aplikasi ini, `iss` harus Google, dan `exp` belum lewat.
+/// Token yang gagal salah satu syarat dijawab [`AppError::Unauthorized`].
 fn decode_claims(id_token: &str, client_id: &str) -> Result<GoogleClaims, AppError> {
     let claims: GoogleClaims =
         insecure_decode_claims(id_token).map_err(|_| AppError::Unauthorized)?;
@@ -120,8 +149,13 @@ fn decode_claims(id_token: &str, client_id: &str) -> Result<GoogleClaims, AppErr
     }
 }
 
-// A gmail.com address only says who the account belongs to. Whether it's really Panitia Magang is
-// decided by the panitia_magang table when the session starts.
+/// Menentukan jenis akun dari email Google yang sudah terverifikasi.
+///
+/// - Email `@student.ub.ac.id` dengan klaim `hd` (domain Google Workspace) yang sama dianggap
+///   mahasiswa. Pengecekan `hd` memastikan akunnya benar-benar dikelola oleh domain kampus.
+/// - Email `@gmail.com` tanpa `hd` dianggap calon Panitia Magang. Apakah benar Panitia Magang
+///   baru diputuskan oleh tabel `panitia_magang` saat sesi dimulai.
+/// - Selain itu, atau bila email belum terverifikasi, dijawab [`AppError::Forbidden`].
 fn account_kind(claims: &GoogleClaims) -> Result<AccountKind, AppError> {
     if !claims.email_verified {
         return Err(AppError::Forbidden);

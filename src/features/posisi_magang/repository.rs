@@ -5,7 +5,10 @@ use super::model::{CreatePosisi, PosisiMagang, PosisiQuery, UbahPosisi};
 // waktu_mulai and waktu_tutup have no time zone and are written in WIB, so they are compared
 // against the time in Jakarta instead of the database server's own time zone.
 
-/// The periods running right now, newest first.
+/// Id periode yang sedang berlangsung saat ini, dari waktu mulai yang paling baru.
+///
+/// Waktu sekarang dibandingkan dalam zona Asia/Jakarta karena `waktu_mulai` dan `waktu_tutup`
+/// disimpan dalam WIB tanpa zona waktu.
 pub async fn running_periode_ids(db: &PgPool) -> Result<Vec<i32>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id_periode
@@ -17,7 +20,10 @@ pub async fn running_periode_ids(db: &PgPool) -> Result<Vec<i32>, sqlx::Error> {
     .await
 }
 
-/// The newest period running right now, or else the newest period there is.
+/// Periode bawaan untuk Panitia Magang: periode berlangsung yang paling baru, atau bila tidak ada,
+/// periode dengan waktu mulai paling baru.
+///
+/// Mengembalikan `None` bila belum ada periode sama sekali.
 pub async fn default_periode_id(db: &PgPool) -> Result<Option<i32>, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT id_periode
@@ -30,10 +36,16 @@ pub async fn default_periode_id(db: &PgPool) -> Result<Option<i32>, sqlx::Error>
     .await
 }
 
-/// The positions of a period, by name, leaving out those of hidden companies. Hidden positions are
-/// left out too, unless asked for, and then they come last.
+/// Daftar posisi dalam satu periode, diurutkan berdasarkan nama posisi.
 ///
-/// deleted_at has no time zone and is written in WIB, so it is sent out with the +07:00 offset.
+/// - Posisi milik perusahaan yang disembunyikan selalu tidak disertakan.
+/// - Posisi yang disembunyikan hanya disertakan bila `termasuk_dihapus` bernilai `true`, dan
+///   ditaruh di akhir daftar.
+/// - `query.p` memfilter perusahaan, dan `query.s` mencari nama posisi tanpa membedakan huruf
+///   besar-kecil. Pencarian memakai `strpos`, bukan `LIKE`, agar karakter `%` dan `_` dianggap
+///   karakter biasa.
+///
+/// `deleted_at` dikirim dalam WIB dengan offset `+07:00`.
 pub async fn list(
     db: &PgPool,
     id_periode: i32,
@@ -68,8 +80,11 @@ pub async fn list(
     .await
 }
 
-/// Saves a position and returns it with its company. Returns `None` if the company does not
-/// exist or is hidden.
+/// Menyimpan posisi baru dan mengembalikannya beserta data perusahaan.
+///
+/// Mengembalikan `None` bila perusahaan tidak ada atau sudah disembunyikan. Periode yang tidak ada
+/// membuat query gagal dengan pelanggaran foreign key `posisi_magang_id_periode_fkey`, yang
+/// diterjemahkan oleh handler.
 pub async fn create(
     db: &PgPool,
     posisi: &CreatePosisi,
@@ -97,8 +112,11 @@ pub async fn create(
     .await
 }
 
-/// Changes the name, description and quota of a position. Returns `None` if the position does not
-/// exist or is hidden, or its company is hidden.
+/// Mengubah nama, deskripsi persyaratan, dan kuota posisi.
+///
+/// Mengembalikan posisi setelah diubah, atau `None` bila posisi tidak ada, sudah disembunyikan,
+/// atau
+/// perusahaannya disembunyikan.
 pub async fn ubah(
     db: &PgPool,
     id_posisi: i32,
@@ -123,8 +141,10 @@ pub async fn ubah(
     .await
 }
 
-/// Hides a position. Returns `None` if the position does not exist or is hidden already, or its
-/// company is hidden.
+/// Menyembunyikan posisi dengan mengisi `deleted_at` dengan waktu sekarang dalam WIB.
+///
+/// Mengembalikan posisi setelah disembunyikan, atau `None` bila posisi tidak ada, sudah
+/// disembunyikan, atau perusahaannya disembunyikan.
 pub async fn sembunyikan(db: &PgPool, id_posisi: i32) -> Result<Option<PosisiMagang>, sqlx::Error> {
     sqlx::query_as(
         "UPDATE posisi_magang pm

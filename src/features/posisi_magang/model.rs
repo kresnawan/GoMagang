@@ -44,6 +44,12 @@ pub struct CreatePosisi {
 }
 
 impl CreatePosisi {
+    /// Memvalidasi dan merapikan body pembuatan posisi.
+    ///
+    /// Aturannya sama dengan perubahan posisi (lihat [`validate_isi`]). Nama posisi dan deskripsi
+    /// yang
+    /// sudah dirapikan disimpan kembali ke struct. `id_perusahaan` dan `id_periode` diperiksa
+    /// keberadaannya saat disimpan ke database.
     pub fn validate(mut self) -> Result<Self, AppError> {
         (self.posisi, self.deskripsi_persyaratan) =
             validate_isi(&self.posisi, &self.deskripsi_persyaratan, self.kuota)?;
@@ -62,6 +68,9 @@ pub struct UbahPosisi {
 }
 
 impl UbahPosisi {
+    /// Memvalidasi dan merapikan body perubahan posisi, dengan aturan yang sama seperti pembuatan
+    /// posisi
+    /// (lihat [`validate_isi`]).
     pub fn validate(mut self) -> Result<Self, AppError> {
         (self.posisi, self.deskripsi_persyaratan) =
             validate_isi(&self.posisi, &self.deskripsi_persyaratan, self.kuota)?;
@@ -69,7 +78,13 @@ impl UbahPosisi {
     }
 }
 
-/// The rules shared by creating and changing a position. Returns the trimmed texts.
+/// Aturan bersama untuk membuat dan mengubah posisi.
+///
+/// - `posisi`: 1-255 karakter setelah spasi di awal dan akhir dibuang.
+/// - `deskripsi_persyaratan`: tidak boleh kosong setelah dirapikan.
+/// - `kuota`: minimal 1. Kuota hanya informasi jumlah yang akan diterima, bukan batas pendaftar.
+///
+/// Mengembalikan nama posisi dan deskripsi yang sudah dirapikan, atau [`AppError::Validation`].
 fn validate_isi(
     posisi: &str,
     deskripsi_persyaratan: &str,

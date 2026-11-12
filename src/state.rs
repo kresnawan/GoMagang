@@ -28,6 +28,18 @@ pub struct AppState {
 }
 
 impl AppState {
+    /// Membuat state bersama untuk semua handler dari konfigurasi dan pool database.
+    ///
+    /// Objek yang mahal atau perlu dibagi (klien Google, pengelola sesi, penanda tangan surat,
+    /// penanda tautan berkas, pengirim email) dibungkus `Arc`, sehingga `AppState` murah untuk
+    /// di-clone
+    /// pada setiap request. `penanda_surat` bernilai `None` bila `SURAT_SIGNING_KEY` tidak di-set,
+    /// dan
+    /// fitur surat keterangan kemudian menjawab `503`.
+    ///
+    /// # Panics
+    /// Panic bila `SURAT_SIGNING_KEY` atau konfigurasi SMTP formatnya tidak valid, agar kesalahan
+    /// konfigurasi ketahuan saat start, bukan saat dipakai.
     pub fn new(config: &Config, db: PgPool) -> Self {
         Self {
             db,

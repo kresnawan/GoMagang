@@ -20,11 +20,19 @@ pub const ALAMAT_PERUSAHAAN: &str = "Jl. Contoh Alamat Instansi No. 1, Kota Mala
 /// is, the internship is taken to start on the day the surat is issued and to last this long.
 const LAMA_MAGANG: Duration = Duration::days(120);
 
+/// MOCK: menghitung tanggal mulai dan selesai magang yang dicetak di surat.
+///
+/// Saat ini yang tersimpan hanya periode pendaftaran, bukan waktu pelaksanaan magang. Sampai data
+/// itu ada, magang dianggap mulai pada tanggal surat terbit dan berlangsung selama
+/// [`LAMA_MAGANG`] (120 hari).
 pub fn masa_magang(tanggal_surat: Date) -> (Date, Date) {
     (tanggal_surat, tanggal_surat + LAMA_MAGANG)
 }
 
-/// MOCK: the numbering scheme of the faculty is not known yet.
+/// MOCK: menyusun nomor surat, misalnya `00007/SKM/MB-FILKOM/2026`.
+///
+/// Formatnya: id surat lima digit, kode tetap, lalu tahun tanggal surat. Skema penomoran resmi
+/// fakultas belum diketahui, sehingga format ini perlu diganti setelah ada.
 pub fn nomor_surat(id_surat: i32, tanggal_surat: Date) -> String {
     format!("{id_surat:05}/SKM/MB-FILKOM/{}", tanggal_surat.year())
 }
@@ -44,7 +52,7 @@ const BULAN: [&str; 12] = [
     "Desember",
 ];
 
-/// "6 November 2026"
+/// Menulis tanggal dengan nama bulan bahasa Indonesia, misalnya `6 November 2026`.
 pub fn tanggal_panjang(tanggal: Date) -> String {
     let bulan = BULAN[usize::from(u8::from(tanggal.month())) - 1];
     format!("{} {bulan} {}", tanggal.day(), tanggal.year())

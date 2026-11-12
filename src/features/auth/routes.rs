@@ -6,6 +6,10 @@ use axum::{
 use super::handler;
 use crate::state::AppState;
 
+/// Router endpoint autentikasi di bawah `/auth`.
+///
+/// Endpoint ini dipasang di root, bukan di `/api/v1`, karena URL callback `/auth/google` sudah
+/// didaftarkan di Google Cloud Console dan cookie refresh token terikat ke path `/auth`.
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/auth/google/login", get(handler::google_login))

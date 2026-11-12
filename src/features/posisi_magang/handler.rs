@@ -14,6 +14,18 @@ use crate::{
     state::AppState,
 };
 
+/// `GET /api/v1/posisi`: daftar posisi magang dalam satu periode.
+///
+/// Periode yang dipakai:
+/// - Mahasiswa: hanya periode yang sedang berlangsung. Tanpa `id_periode`, dipakai periode
+///   berlangsung yang paling baru. `id_periode` lain dijawab `403`.
+/// - Panitia Magang: periode mana pun. Tanpa `id_periode`, dipakai periode yang sedang berlangsung,
+///   atau periode terbaru bila tidak ada yang berlangsung.
+///
+/// Bila tidak ada periode yang bisa dipakai, dikembalikan daftar kosong. Filter `p` (id perusahaan)
+/// dan `s` (pencarian nama posisi) bersifat opsional. Posisi yang disembunyikan hanya bisa diminta
+/// Panitia Magang lewat `termasuk_dihapus=true`, karena mahasiswa tidak bisa mendaftar ke posisi
+/// tersebut.
 pub async fn list(
     State(state): State<AppState>,
     user: User,
@@ -53,6 +65,14 @@ pub async fn list(
     ))
 }
 
+/// `POST /api/v1/posisi`: menambah posisi magang (hanya Panitia Magang).
+///
+/// Body divalidasi lebih dulu (lihat [`CreatePosisi::validate`]). Periode yang tidak ada dijawab
+/// `422` "Periode tidak ditemukan.", yang dikenali dari pelanggaran foreign key. Perusahaan yang
+/// tidak
+/// ada atau sudah disembunyikan dijawab `422` "Perusahaan tidak ditemukan.", karena perusahaan
+/// tersembunyi tidak menerima posisi baru. Bila berhasil, dijawab `201` beserta posisi dan
+/// perusahaannya.
 pub async fn create(
     State(state): State<AppState>,
     Json(data): Json<CreatePosisi>,
@@ -78,6 +98,12 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(posisi)))
 }
 
+/// `PATCH /api/v1/posisi/{id}`: mengubah nama, deskripsi persyaratan, dan kuota posisi (hanya
+/// Panitia Magang).
+///
+/// Perusahaan dan periode posisi tidak bisa diubah, karena pendaftaran pada posisi itu terikat ke
+/// keduanya. Posisi yang tidak ada atau disembunyikan, maupun yang perusahaannya disembunyikan,
+/// dijawab `404`.
 pub async fn ubah(
     State(state): State<AppState>,
     Path(id_posisi): Path<i32>,
@@ -92,7 +118,13 @@ pub async fn ubah(
     Ok(Json(posisi))
 }
 
-/// Hides the position. Its row stays, so the pendaftaran on it keep their history.
+/// `DELETE /api/v1/posisi/{id}`: menyembunyikan posisi magang (soft delete, hanya Panitia Magang).
+///
+/// Baris posisi tetap ada dengan waktu disembunyikan di `deleted_at`, sehingga pendaftaran pada
+/// posisi itu tetap punya riwayat. Posisi yang disembunyikan tidak tampil di katalog mahasiswa dan
+/// tidak bisa didaftar. Posisi yang tidak ada, sudah disembunyikan, atau perusahaannya
+/// disembunyikan
+/// dijawab `404`.
 pub async fn sembunyikan(
     State(state): State<AppState>,
     Path(id_posisi): Path<i32>,

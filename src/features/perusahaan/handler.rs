@@ -16,7 +16,11 @@ use crate::{
 
 const NAMA_DIPAKAI: AppError = AppError::Conflict("Perusahaan dengan nama ini sudah ada.");
 
-/// The companies that are not hidden. Panitia Magang may ask for the hidden ones too.
+/// `GET /api/v1/perusahaan`: daftar perusahaan mitra, diurutkan berdasarkan nama.
+///
+/// Secara default hanya perusahaan yang tidak disembunyikan yang dikembalikan. Panitia Magang boleh
+/// meminta perusahaan yang disembunyikan juga dengan `termasuk_dihapus=true`; permintaan itu dari
+/// mahasiswa dijawab `403`.
 pub async fn list(
     State(state): State<AppState>,
     user: User,
@@ -34,6 +38,10 @@ pub async fn list(
     Ok(Json(repository::list(&state.db, termasuk_dihapus).await?))
 }
 
+/// `POST /api/v1/perusahaan`: menambah perusahaan mitra (hanya Panitia Magang).
+///
+/// Nama dirapikan dan divalidasi lebih dulu. Nama yang sudah dipakai perusahaan lain yang tidak
+/// disembunyikan, tanpa membedakan huruf besar-kecil, dijawab `409`. Bila berhasil, dijawab `201`.
 pub async fn create(
     State(state): State<AppState>,
     Json(data): Json<NamaPerusahaan>,
@@ -47,6 +55,10 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(perusahaan)))
 }
 
+/// `PATCH /api/v1/perusahaan/{id}`: mengganti nama perusahaan mitra (hanya Panitia Magang).
+///
+/// Perusahaan yang tidak ada atau sudah disembunyikan dijawab `404`. Nama yang sudah dipakai
+/// perusahaan lain yang tidak disembunyikan dijawab `409`.
 pub async fn rename(
     State(state): State<AppState>,
     Path(id_perusahaan): Path<i32>,
@@ -61,7 +73,14 @@ pub async fn rename(
     }
 }
 
-/// Hides the company. Its row stays, so pendaftaran on its positions keep their history.
+/// `DELETE /api/v1/perusahaan/{id}`: menyembunyikan perusahaan mitra (soft delete, hanya Panitia
+/// Magang).
+///
+/// Baris perusahaan tetap ada dengan waktu disembunyikan di `deleted_at`, sehingga posisi dan
+/// pendaftaran yang terkait tetap punya riwayat. Perusahaan yang disembunyikan tidak ditawarkan
+/// lagi
+/// untuk posisi dan pendaftaran baru. Perusahaan yang tidak ada atau sudah disembunyikan dijawab
+/// `404`.
 pub async fn soft_delete(
     State(state): State<AppState>,
     Path(id_perusahaan): Path<i32>,

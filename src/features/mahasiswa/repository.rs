@@ -2,6 +2,12 @@ use sqlx::{PgPool, Postgres, QueryBuilder};
 
 use super::model::{Mahasiswa, MahasiswaPatch};
 
+/// Mengambil data diri mahasiswa beserta email akunnya.
+///
+/// Mengembalikan `None` bila pengguna ini tidak punya baris di tabel `mahasiswa`. Beberapa kolom
+/// di-cast di query: `nim` dan `jenis_kelamin` (bertipe `CHAR`) dijadikan teks agar spasi
+/// pengisinya
+/// hilang, dan `ipk` (bertipe `NUMERIC`) dijadikan `float8` agar terkirim sebagai angka di JSON.
 pub async fn find_by_id_pengguna(
     db: &PgPool,
     id_pengguna: i32,
@@ -20,8 +26,13 @@ pub async fn find_by_id_pengguna(
     .await
 }
 
-/// Changes only the columns present in the patch. The column names are fixed here and every value
-/// is sent as a bound parameter, so the body can't alter the SQL.
+/// Mengubah hanya kolom yang ada di `patch`; kolom lain dibiarkan.
+///
+/// Query `UPDATE` disusun dinamis dengan `QueryBuilder`. Nama kolom ditulis tetap di kode ini dan
+/// setiap nilai dikirim sebagai parameter terikat, sehingga isi body tidak bisa mengubah SQL. Bila
+/// tidak ada kolom yang diubah, tidak ada query yang dijalankan.
+///
+/// Error unique violation pada `nim` diteruskan ke pemanggil agar bisa dijawab `409`.
 pub async fn update(
     db: &PgPool,
     id_pengguna: i32,

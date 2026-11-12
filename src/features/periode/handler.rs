@@ -14,6 +14,13 @@ use crate::{
     state::AppState,
 };
 
+/// `GET /api/v1/periode`: daftar periode pendaftaran, dari yang paling baru.
+///
+/// Panitia Magang bisa memfilter dengan `id` dan `status` apa pun (`belum_dimulai`, `berlangsung`,
+/// `selesai`). Mahasiswa hanya boleh melihat periode yang sedang berlangsung: tanpa filter status,
+/// hanya periode berlangsung yang dikembalikan, dan filter status lain dijawab `403`. Pengguna
+/// tanpa
+/// peran dijawab `403`.
 pub async fn list(
     State(state): State<AppState>,
     user: User,
@@ -35,6 +42,11 @@ pub async fn list(
     Ok(Json(repository::list(&state.db, query.id, status).await?))
 }
 
+/// `POST /api/v1/periode`: membuat periode pendaftaran baru (hanya Panitia Magang).
+///
+/// Body divalidasi lebih dulu (lihat [`CreatePeriode::validate`]). Rentang waktu yang beririsan,
+/// termasuk yang hanya bersentuhan di ujungnya, dengan periode lain dijawab `409`. Bila berhasil,
+/// dijawab `201` beserta periode yang tersimpan dan statusnya saat ini.
 pub async fn create(
     State(state): State<AppState>,
     Json(data): Json<CreatePeriode>,
@@ -55,6 +67,11 @@ pub async fn create(
     Ok((StatusCode::CREATED, Json(created)))
 }
 
+/// `PATCH /api/v1/periode/{id}/start`: memulai periode yang belum dimulai saat itu juga.
+///
+/// Waktu mulai dimajukan ke waktu sekarang, sedangkan waktu tutup tetap. Dijawab `404` bila periode
+/// tidak ada, dan `409` bila periode sudah berlangsung, sudah selesai, atau rentang barunya akan
+/// beririsan dengan periode lain. Bila berhasil, periode terbaru dikembalikan.
 pub async fn start(
     State(state): State<AppState>,
     Path(id): Path<i32>,
@@ -83,6 +100,11 @@ pub async fn start(
     Ok(Json(started))
 }
 
+/// `PATCH /api/v1/periode/{id}/stop`: menghentikan periode yang sedang berlangsung saat itu juga.
+///
+/// Waktu tutup dimundurkan ke waktu sekarang, sedangkan waktu mulai tetap. Dijawab `404` bila
+/// periode tidak ada, dan `409` bila periode belum dimulai atau sudah selesai. Bila berhasil,
+/// periode terbaru dikembalikan.
 pub async fn stop(
     State(state): State<AppState>,
     Path(id): Path<i32>,

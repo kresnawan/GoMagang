@@ -25,6 +25,11 @@ const STATE_TTL: Duration = Duration::from_secs(10 * 60);
 const MAHASISWA_HOME_PATH: &str = "/dasbor";
 const PANITIA_MAGANG_HOME_PATH: &str = "/panitia-magang";
 
+/// `GET /auth/google/login`: memulai login dengan Google.
+///
+/// Membuat token `state` acak, menyimpannya di cookie `oauth_state` (berlaku 10 menit, khusus path
+/// `/auth/google`), lalu me-redirect browser ke halaman login Google. Cookie memakai
+/// `SameSite=Lax` karena harus ikut terkirim saat Google me-redirect kembali ke callback.
 pub async fn google_login(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -42,6 +47,12 @@ pub async fn google_login(
     Ok((jar.add(cookie), Redirect::to(&url)))
 }
 
+/// `GET /auth/google`: callback dari Google setelah pengguna memilih akun.
+///
+/// Cookie `oauth_state` selalu dihapus. Bila login berhasil, cookie sesi dipasang dan browser
+/// diarahkan ke halaman awal sesuai peran (`/dasbor` untuk mahasiswa, `/panitia-magang` untuk
+/// Panitia Magang) di frontend. Bila gagal, browser diarahkan ke `/login?error=<kode>` di frontend
+/// dengan kode `failed`, `cancelled`, `domain`, atau `not_registered` (lihat [`complete_login`]).
 pub async fn google_callback(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -65,10 +76,20 @@ pub async fn google_callback(
     }
 }
 
+/// `GET /auth/me`: mengembalikan id dan email pengguna yang sedang login.
+///
+/// Dipakai frontend untuk memeriksa apakah sesi masih berlaku. Tanpa access token yang valid,
+/// extractor [`User`] menjawab `401`.
 pub async fn me(user: User) -> Json<User> {
     Json(user)
 }
 
+/// `POST /auth/refresh`: memperbarui sesi dengan refresh token.
+///
+/// Bila berhasil, access token dan refresh token baru dipasang sebagai cookie, dengan jawaban
+/// `204`. Bila refresh token tidak ada, tidak valid, atau terdeteksi dipakai ulang, cookie sesi
+/// dihapus dan dijawab `401`, sehingga frontend tahu pengguna harus login ulang. Error lain
+/// (misalnya database sedang bermasalah) tidak menghapus cookie, karena sesinya mungkin masih sah.
 pub async fn refresh(State(state): State<AppState>, jar: CookieJar) -> Response {
     match rotate_session(&state, &jar).await {
         Ok((access, refresh)) => {
@@ -82,6 +103,11 @@ pub async fn refresh(State(state): State<AppState>, jar: CookieJar) -> Response 
     }
 }
 
+/// `POST /auth/logout`: mengakhiri sesi.
+///
+/// Seluruh keluarga refresh token yang sedang dipakai dicabut dari database, sehingga sesi tidak
+/// bisa diperbarui lagi dari perangkat ini, lalu cookie sesi dihapus. Selalu dijawab `204`,
+/// termasuk bila pengguna memang belum login.
 pub async fn logout(
     State(state): State<AppState>,
     jar: CookieJar,
@@ -99,7 +125,15 @@ struct LoginSession {
     home_path: &'static str,
 }
 
-/// Returns the new session, or the error code the frontend expects on `/login?error=`.
+/// Menyelesaikan login dari parameter callback Google.
+///
+/// Urutan pemeriksaan:
+/// 1. `state` di query harus sama dengan cookie `oauth_state`; bila tidak, kode `failed`.
+/// 2. Bila Google mengirim `error` (misalnya pengguna menekan batal), kode `cancelled`.
+/// 3. Code ditukar ke Google; domain email yang tidak diizinkan menghasilkan kode `domain`.
+/// 4. Sesi dimulai; Panitia Magang yang emailnya belum terdaftar menghasilkan `not_registered`.
+///
+/// Mengembalikan sesi baru, atau kode error yang dipakai frontend di `/login?error=`.
 async fn complete_login(
     state: &AppState,
     expected_state: Option<String>,
@@ -130,6 +164,16 @@ async fn complete_login(
         })
 }
 
+/// Membuat sesi untuk pengguna yang sudah lolos verifikasi Google.
+///
+/// - Mahasiswa: baris `pengguna` dan `mahasiswa` dibuat bila belum ada, tanpa mengubah data diri
+///   yang sudah tersimpan.
+/// - Panitia Magang: email harus sudah terdaftar di tabel `panitia_magang`. Pada login pertama,
+///   akun Google-nya diikat ke baris tersebut. Email yang tidak terdaftar dijawab
+///   [`AppError::Forbidden`].
+///
+/// Setelah itu refresh token baru (keluarga baru) disimpan sebagai hash, dan cookie access token
+/// serta refresh token disiapkan beserta path halaman awal sesuai peran.
 async fn start_session(
     state: &AppState,
     claims: &GoogleClaims,
@@ -163,6 +207,12 @@ async fn start_session(
     })
 }
 
+/// Menukar refresh token di cookie dengan pasangan access token dan refresh token baru.
+///
+/// Refresh token baru tetap berada di keluarga yang sama dan mewarisi masa berlaku keluarga itu,
+/// sehingga sesi tidak bisa diperpanjang tanpa batas. Mengembalikan [`AppError::Unauthorized`]
+/// bila cookie tidak ada atau token tidak bisa dipakai (lihat
+/// [`repository::rotate_refresh_token`]).
 async fn rotate_session(
     state: &AppState,
     jar: &CookieJar,

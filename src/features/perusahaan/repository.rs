@@ -2,9 +2,11 @@ use sqlx::PgPool;
 
 use super::model::{PerusahaanMitra, RenameResult};
 
-/// The companies by name, leaving out the hidden ones unless asked for. Hidden ones come last.
+/// Daftar perusahaan berdasarkan nama; yang disembunyikan tidak disertakan kecuali diminta.
 ///
-/// deleted_at has no time zone and is written in WIB, so it is sent out with the +07:00 offset.
+/// Bila `termasuk_dihapus` bernilai `true`, perusahaan yang disembunyikan ditaruh di akhir daftar.
+/// `deleted_at` tidak punya zona waktu dan disimpan dalam WIB, sehingga dikirim dengan offset
+/// `+07:00`.
 pub async fn list(
     db: &PgPool,
     termasuk_dihapus: bool,
@@ -21,8 +23,13 @@ pub async fn list(
     .await
 }
 
-/// Saves a company. Returns `None` if the name is already taken by a company that is not hidden,
-/// in any letter case. A hidden company's name is free to use again.
+/// Menyimpan perusahaan baru.
+///
+/// Mengembalikan `None` bila nama sudah dipakai perusahaan yang tidak disembunyikan, tanpa
+/// membedakan huruf besar-kecil. Nama perusahaan yang sudah disembunyikan boleh dipakai lagi.
+///
+/// Tabel dikunci selama transaksi; tanpa kunci ini, dua request dengan nama yang sama bisa
+/// sama-sama menganggap nama itu bebas lalu sama-sama tersimpan.
 pub async fn create(db: &PgPool, nama: &str) -> Result<Option<PerusahaanMitra>, sqlx::Error> {
     let mut tx = db.begin().await?;
 
@@ -49,8 +56,14 @@ pub async fn create(db: &PgPool, nama: &str) -> Result<Option<PerusahaanMitra>, 
     Ok(perusahaan)
 }
 
-/// Renames a company that is not hidden. The new name may not belong to another company that is
-/// not hidden, in any letter case.
+/// Mengganti nama perusahaan yang tidak disembunyikan.
+///
+/// Nama baru tidak boleh dipakai perusahaan lain yang tidak disembunyikan, tanpa membedakan huruf
+/// besar-kecil. Kunci tabelnya sama dengan [`create`], sehingga rename dan create tidak bisa
+/// sama-sama mengambil satu nama.
+///
+/// Mengembalikan hasil berupa [`RenameResult`]: berhasil beserta data terbaru, tidak ditemukan,
+/// atau nama sudah dipakai.
 pub async fn rename(
     db: &PgPool,
     id_perusahaan: i32,
@@ -100,7 +113,10 @@ pub async fn rename(
     })
 }
 
-/// Hides a company. Returns `None` if there is no such company, or it is hidden already.
+/// Menyembunyikan perusahaan dengan mengisi `deleted_at` dengan waktu sekarang dalam WIB.
+///
+/// Mengembalikan data perusahaan setelah disembunyikan, atau `None` bila perusahaan tidak ada atau
+/// sudah disembunyikan sebelumnya.
 pub async fn soft_delete(
     db: &PgPool,
     id_perusahaan: i32,

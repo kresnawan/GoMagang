@@ -50,6 +50,22 @@ pub enum PengirimEmail {
 }
 
 impl PengirimEmail {
+    /// Membuat pengirim email dari konfigurasi SMTP.
+    ///
+    /// Tanpa konfigurasi (`None`), dihasilkan [`PengirimEmail::Nonaktif`] yang membuang semua
+    /// email.
+    /// Dengan konfigurasi, transport SMTP dibuat sesuai mode TLS:
+    /// - `Starttls`: koneksi biasa yang di-upgrade dengan STARTTLS (default port 587).
+    /// - `Tls`: TLS sejak awal (default port 465).
+    /// - `None`: tanpa enkripsi, hanya untuk server uji lokal seperti Mailpit (default port 25).
+    ///
+    /// Kredensial hanya dipasang bila `SMTP_USERNAME` di-set. Koneksi ke server SMTP belum dibuka
+    /// di
+    /// sini, tetapi baru saat email pertama dikirim.
+    ///
+    /// # Panics
+    /// Panic bila `SMTP_FROM` bukan alamat email yang valid atau `SMTP_HOST` tidak bisa dipakai
+    /// untuk TLS.
     pub fn new(config: Option<&SmtpConfig>) -> Self {
         let Some(config) = config else {
             return Self::Nonaktif;
@@ -82,7 +98,14 @@ impl PengirimEmail {
         }
     }
 
-    /// Sends the mail without waiting for it. A failure is only logged.
+    /// Mengirim email di latar belakang tanpa menunggu hasilnya.
+    ///
+    /// Pada mode SMTP, pesan disusun lalu dikirim dari task Tokio terpisah, sehingga request yang
+    /// memicu
+    /// email tidak tertahan oleh server SMTP yang lambat. Kegagalan (alamat tidak valid, login
+    /// ditolak,
+    /// server tidak terjangkau) hanya dicatat ke log dan tidak dikirim ulang. Pada mode `Nonaktif`,
+    /// email dibuang. Pada mode uji, email disimpan agar bisa diperiksa test.
     pub fn kirim(&self, email: Email) {
         match self {
             Self::Smtp { transport, dari } => {
@@ -107,6 +130,14 @@ impl PengirimEmail {
     }
 }
 
+/// Menyusun pesan MIME dari [`Email`].
+///
+/// - Tanpa HTML: pesan teks biasa (`text/plain`).
+/// - Dengan HTML: `multipart/alternative` berisi versi teks biasa dan bagian `multipart/related`.
+///   Bagian `related` memuat HTML beserta gambar inline PNG yang dirujuk dengan `cid:<cid>`.
+///   Klien email menampilkan HTML bila mampu, dan versi teks bila tidak.
+///
+/// Mengembalikan pesan error berupa teks bila alamat penerima tidak valid atau pesan gagal disusun.
 fn build_message(dari: &Mailbox, email: &Email) -> Result<Message, String> {
     let kepada: Mailbox = email.kepada.parse().map_err(|err| format!("{err}"))?;
     let builder = Message::builder()

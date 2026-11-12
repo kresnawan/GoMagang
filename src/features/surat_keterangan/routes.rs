@@ -7,6 +7,15 @@ use axum::{
 use super::handler;
 use crate::state::AppState;
 
+/// Router endpoint surat keterangan kepesertaan magang.
+///
+/// - `GET /pendaftaran/{id}/surat-keterangan`: unduh surat; login wajib, aturan peran ada di
+///   handler.
+/// - `GET /surat-keterangan/verifikasi` dan `POST /surat-keterangan/verifikasi`: publik tanpa
+///   login,
+///   karena siapa pun yang memegang surat harus bisa memeriksa keasliannya. Unggahan PDF dibatasi
+///   `BATAS_BODY_VERIFIKASI`.
+/// - `GET /surat-keterangan/kunci-publik`: publik.
 pub fn routes() -> Router<AppState> {
     let verifikasi_berkas = post(handler::verifikasi_berkas)
         .route_layer(DefaultBodyLimit::max(handler::BATAS_BODY_VERIFIKASI));

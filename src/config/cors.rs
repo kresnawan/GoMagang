@@ -4,6 +4,12 @@ use axum::http::{
 };
 use tower_http::cors::{AllowOrigin, CorsLayer};
 
+/// Membuat layer CORS untuk frontend.
+///
+/// Hanya origin di `allowed_origins` (dari `CORS_ALLOWED_ORIGINS`) yang diizinkan, dengan metode
+/// `GET`, `POST`, `PATCH`, `PUT`, dan `DELETE`. `allow_credentials` aktif karena sesi dikirim lewat
+/// cookie. Header `Content-Disposition` dibuka (expose) agar frontend bisa membaca nama file saat
+/// mengunduh berkas, misalnya surat keterangan.
 pub fn layer(allowed_origins: &[HeaderValue]) -> CorsLayer {
     CorsLayer::new()
         .allow_origin(AllowOrigin::list(allowed_origins.iter().cloned()))

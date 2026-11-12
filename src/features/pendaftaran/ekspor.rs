@@ -18,12 +18,14 @@ pub enum FormatEkspor {
 }
 
 impl FormatEkspor {
+    /// Content type HTTP untuk format ekspor, dipakai di header `Content-Type` respons.
     pub fn content_type(self) -> &'static str {
         match self {
             Self::Xlsx => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         }
     }
 
+    /// Ekstensi nama berkas untuk format ekspor, tanpa titik.
     fn ekstensi(self) -> &'static str {
         match self {
             Self::Xlsx => "xlsx",
@@ -39,6 +41,11 @@ pub struct Ekspor {
 }
 
 impl Ekspor {
+    /// Memvalidasi permintaan ekspor.
+    ///
+    /// Daftar id diurutkan, duplikatnya dibuang, dan tidak boleh kosong. Jumlahnya maksimal
+    /// [`MAX_EKSPOR`] (10.000), cukup untuk semua pendaftaran satu periode sekaligus mencegah satu
+    /// request membangun berkas yang sangat besar.
     pub fn validate(mut self) -> Result<Self, AppError> {
         rapikan_id_pendaftaran(&mut self.id_pendaftaran)?;
         if self.id_pendaftaran.len() > MAX_EKSPOR {
@@ -107,9 +114,13 @@ pub struct InfoEkspor {
     pub tautan_berlaku_sampai: OffsetDateTime,
 }
 
-/// The pendaftaran with these ids, newest first as in the list. Unknown ids are left out.
+/// Data setiap pendaftaran yang diekspor, dari yang paling baru seperti di daftar pendaftaran.
 ///
-/// The casts drop the CHAR padding and turn NUMERIC ipk into a float.
+/// Id yang tidak dikenal tidak disertakan, sehingga pemanggil bisa membandingkan jumlahnya untuk
+/// mendeteksi id yang salah. Data jadwal seleksi, plotting DPM, dan nomor surat ikut diambil bila
+/// ada.
+/// Beberapa kolom di-cast: NIM dan jenis kelamin menjadi teks agar spasi `CHAR` hilang, dan IPK
+/// menjadi bilangan desimal. Waktu ditulis dalam WIB tanpa offset, sesuai format sel Excel.
 pub async fn find_baris(
     db: &PgPool,
     id_pendaftaran: &[i32],
@@ -147,7 +158,7 @@ pub async fn find_baris(
     .await
 }
 
-/// The files of these pendaftaran, in the order they were uploaded.
+/// Berkas-berkas milik pendaftaran yang diekspor, sesuai urutan diunggah.
 pub async fn find_berkas(
     db: &PgPool,
     id_pendaftaran: &[i32],
@@ -163,7 +174,10 @@ pub async fn find_berkas(
     .await
 }
 
-/// Gives each row the links to its files, made by `url` from an id_berkas.
+/// Memasangkan tautan setiap berkas ke baris pendaftarannya.
+///
+/// Tautan dibuat oleh `url` dari `id_berkas`, sehingga modul ini tidak perlu tahu cara tautan
+/// publik ditandatangani. Urutan berkas dalam satu baris mengikuti urutan `berkas`.
 pub fn lampirkan_berkas(
     semua: &mut [BarisEkspor],
     berkas: Vec<BerkasEkspor>,
@@ -182,7 +196,8 @@ pub fn lampirkan_berkas(
     }
 }
 
-/// "pendaftar-20261109-1430.xlsx", from the time in WIB.
+/// Nama berkas hasil ekspor berdasarkan waktu sekarang dalam WIB, misalnya
+/// `pendaftar-20261109-1430.xlsx`.
 pub fn nama_berkas(format: FormatEkspor) -> String {
     let sekarang = OffsetDateTime::now_utc().to_offset(offset!(+7));
     let waktu = sekarang
@@ -219,7 +234,8 @@ const BULAN: [&str; 12] = [
     "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
 ];
 
-/// "2026-10-01" → "1 Okt 2026"
+/// Menulis tanggal `YYYY-MM-DD` dalam format pendek bahasa Indonesia, misalnya `2026-10-01` menjadi
+/// `1 Okt 2026`. Teks yang bukan tanggal valid dikembalikan apa adanya.
 fn tanggal_pendek(tanggal: &str) -> String {
     let mut bagian = tanggal.splitn(3, '-');
     let (Some(tahun), Some(bulan), Some(hari)) = (bagian.next(), bagian.next(), bagian.next())
@@ -232,7 +248,7 @@ fn tanggal_pendek(tanggal: &str) -> String {
     }
 }
 
-/// "9 Des 2026 14.30 WIB"
+/// Menulis waktu dalam WIB, misalnya `9 Des 2026 14.30 WIB`. Dipakai di lembar Keterangan.
 fn waktu_wib(waktu: OffsetDateTime) -> String {
     let waktu = waktu.to_offset(offset!(+7));
     format!(
@@ -254,7 +270,10 @@ struct KolomBerkas<'a> {
     ke: usize,
 }
 
-/// Which file of the row goes into which column: each file paired with its (jenis, ke).
+/// Menentukan kolom untuk setiap berkas dalam satu baris.
+///
+/// Setiap berkas dipasangkan dengan jenisnya dan urutan ke berapa berkas jenis itu muncul di baris
+/// tersebut. Misalnya, berkas tambahan kedua menjadi `(Portfolio dan Berkas Tambahan, 2)`.
 fn urutan_berkas(baris: &BarisEkspor) -> impl Iterator<Item = (KolomBerkas<'_>, &TautanEkspor)> {
     let mut sudah: Vec<&str> = Vec::new();
     baris.berkas.iter().map(move |tautan| {
@@ -270,8 +289,13 @@ fn urutan_berkas(baris: &BarisEkspor) -> impl Iterator<Item = (KolomBerkas<'_>, 
     })
 }
 
-/// The link columns, in the order the files were first uploaded, with their headers. A kind gets
-/// numbered columns ("URL X 1", "URL X 2") only if some row has more than one file of it.
+/// Menyusun kolom-kolom tautan berkas beserta judulnya.
+///
+/// Kolom diurutkan berdasarkan jenis berkas sesuai urutan pertama kali muncul, lalu berdasarkan
+/// urutan ke berapa. Kolom suatu jenis hanya diberi nomor (`URL X 1`, `URL X 2`) bila ada baris
+/// yang
+/// punya lebih dari satu berkas jenis itu; selain itu judulnya cukup `URL X`. Kolom bernomor dari
+/// jenis yang sama selalu berdampingan.
 fn kolom_berkas(semua: &[BarisEkspor]) -> (Vec<KolomBerkas<'_>>, Vec<String>) {
     let mut kolom: Vec<KolomBerkas> = Vec::new();
     for baris in semua {
@@ -308,7 +332,9 @@ fn kolom_berkas(semua: &[BarisEkspor]) -> (Vec<KolomBerkas<'_>>, Vec<String>) {
     (kolom, judul)
 }
 
-/// "Ganjil 2026/2027 (1 Okt 2026 – 30 Nov 2026)", or only the dates if there is no catatan.
+/// Label periode untuk kolom Periode, misalnya `Ganjil 2026/2027 (1 Okt 2026 – 30 Nov 2026)`.
+///
+/// Bila periode tidak punya catatan, yang ditulis hanya rentang tanggalnya.
 fn label_periode(baris: &BarisEkspor) -> String {
     let rentang = format!(
         "{} – {}",
@@ -321,6 +347,8 @@ fn label_periode(baris: &BarisEkspor) -> String {
     }
 }
 
+/// Menulis kode jenis kelamin dalam bentuk lengkap: `L` menjadi `Laki-laki` dan `P` menjadi
+/// `Perempuan`. Kode lain dikembalikan apa adanya.
 fn jenis_kelamin(kode: &str) -> &str {
     match kode {
         "L" => "Laki-laki",
@@ -329,8 +357,17 @@ fn jenis_kelamin(kode: &str) -> &str {
     }
 }
 
-/// Builds the workbook. Text is always written as text, so a value such as "=1+1" from a
-/// mahasiswa never runs as a formula.
+/// Menyusun workbook Excel hasil ekspor.
+///
+/// Lembar **Pendaftar** berisi satu baris per pendaftaran: kolom-kolom tetap (data diri, posisi,
+/// periode, status, waktu, seleksi, DPM, nomor surat), lalu kolom tautan berkas (lihat
+/// [`kolom_berkas`]). Baris judul dibekukan dan diberi autofilter. Angka, tanggal, dan jam ditulis
+/// sebagai nilai Excel dengan format yang sesuai.
+///
+/// Lembar **Keterangan** berisi waktu ekspor, jumlah pendaftar, dan masa berlaku tautan berkas.
+///
+/// Teks selalu ditulis sebagai teks, sehingga nilai dari mahasiswa seperti `=1+1` tidak pernah
+/// dijalankan sebagai rumus (mencegah formula injection).
 pub fn buat_xlsx(semua: &[BarisEkspor], info: &InfoEkspor) -> Result<Vec<u8>, XlsxError> {
     let judul = Format::new()
         .set_bold()

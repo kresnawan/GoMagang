@@ -12,6 +12,7 @@ use serde_json::Value;
 use sqlx::{AssertSqlSafe, PgPool};
 use tower::ServiceExt;
 
+use super::pembatalan;
 use crate::{
     app,
     config::Config,
@@ -1013,7 +1014,8 @@ async fn mahasiswa_lists_only_their_own(db: PgPool) {
     assert_eq!(item["mahasiswa"]["nama"], "Budi");
     assert_eq!(item["ada_jadwal_seleksi"], false);
     assert_eq!(item["ada_plotting_dpm"], false);
-    assert_eq!(item.as_object().unwrap().len(), 11);
+    assert_eq!(item["batas_konfirmasi"], Value::Null);
+    assert_eq!(item.as_object().unwrap().len(), 12);
     assert_eq!(item["mahasiswa"].as_object().unwrap().len(), 3);
 
     let response = get(&ctx.app, Some(&tanpa_daftar), URI).await;
@@ -1742,6 +1744,173 @@ impl Ctx {
         .await
         .unwrap()
     }
+}
+
+const KEDALUWARSA: &str =
+    "Batas waktu konfirmasi 1 x 12 jam sudah lewat, sehingga pendaftaran ini dibatalkan.";
+
+impl Ctx {
+    /// A pendaftaran that Panitia Magang has just moved to Diterima.
+    async fn diterima(&self, cookie: &str, panitia_magang: &str) -> i64 {
+        let id = self.pendaftaran(cookie, "Lolos Seleksi Administrasi").await;
+        let response = ubah_status(&self.app, panitia_magang, id, "Diterima").await;
+        assert_eq!(response.status(), StatusCode::OK);
+        id
+    }
+
+    /// Moves every time of this pendaftaran back, as if it became Diterima that long ago.
+    async fn mundurkan(&self, id: i64, selang: &str) {
+        sqlx::query(
+            "WITH log AS (
+                 UPDATE log_status SET created_at = created_at - $2::interval
+                 WHERE id_pendaftaran = $1
+             )
+             UPDATE pendaftaran SET updated_at = updated_at - $2::interval
+             WHERE id_pendaftaran = $1",
+        )
+        .bind(id as i32)
+        .bind(selang)
+        .execute(&self.db)
+        .await
+        .unwrap();
+    }
+}
+
+#[sqlx::test]
+async fn diterima_gets_a_12_hour_deadline_and_a_firm_warning_by_email(db: PgPool) {
+    let ctx = setup(db);
+    let (_, cookie) = ctx.mahasiswa("a@student.ub.ac.id").await;
+    let panitia_magang = ctx.panitia_magang().await;
+    let id = ctx.diterima(&cookie, &panitia_magang).await;
+
+    let response = get(&ctx.app, Some(&cookie), &format!("{URI}/{id}")).await;
+    let detail = json_body(response).await;
+    let diharapkan: String = sqlx::query_scalar(
+        "SELECT to_char(created_at + interval '12 hours', 'YYYY-MM-DD\"T\"HH24:MI:SS+07:00')
+         FROM log_status WHERE id_pendaftaran = $1 AND status_lama IS NOT NULL",
+    )
+    .bind(id as i32)
+    .fetch_one(&ctx.db)
+    .await
+    .unwrap();
+    assert_eq!(detail["batas_konfirmasi"], diharapkan);
+
+    let terkirim = ctx.email_terkirim();
+    let email = terkirim.last().unwrap();
+    assert_eq!(
+        email.subjek,
+        "Status pendaftaran magang: Diterima (konfirmasi dalam 1 x 12 jam)"
+    );
+    assert!(
+        email
+            .isi
+            .contains("PENTING: Konfirmasi penerimaan wajib dilakukan paling lambat"),
+        "{}",
+        email.isi
+    );
+    assert!(
+        email
+            .isi
+            .contains("otomatis dinyatakan Batal/Mengundurkan Diri")
+    );
+    let html = &email.html.as_ref().unwrap().isi;
+    assert!(html.contains("PENTING: Konfirmasi dalam 1 x 12 jam"));
+    assert!(html.contains("<strong>Batal/Mengundurkan Diri</strong>"));
+    assert!(html.contains(">Konfirmasi penerimaan</a>"));
+    assert!(html.contains(" WIB</strong>"));
+
+    // Once confirmed, there is no deadline any more.
+    assert_eq!(terima(&ctx.app, &cookie, id).await.status(), StatusCode::OK);
+    let response = get(&ctx.app, Some(&cookie), &format!("{URI}/{id}")).await;
+    assert_eq!(json_body(response).await["batas_konfirmasi"], Value::Null);
+}
+
+#[sqlx::test]
+async fn a_confirmation_after_12_hours_is_refused(db: PgPool) {
+    let ctx = setup(db);
+    let panitia_magang = ctx.panitia_magang().await;
+
+    let (_, tepat_waktu) = ctx.mahasiswa("a@student.ub.ac.id").await;
+    let id = ctx.diterima(&tepat_waktu, &panitia_magang).await;
+    ctx.mundurkan(id, "11 hours 59 minutes").await;
+    assert_eq!(
+        terima(&ctx.app, &tepat_waktu, id).await.status(),
+        StatusCode::OK
+    );
+
+    let (_, terlambat) = ctx.mahasiswa("b@student.ub.ac.id").await;
+    let id = ctx.diterima(&terlambat, &panitia_magang).await;
+    ctx.mundurkan(id, "12 hours 1 minute").await;
+    let before = ctx.snapshot(id).await;
+
+    let response = terima(&ctx.app, &terlambat, id).await;
+
+    assert_rejected(response, StatusCode::CONFLICT, KEDALUWARSA).await;
+    assert_eq!(ctx.snapshot(id).await, before);
+}
+
+#[sqlx::test]
+async fn unconfirmed_acceptances_are_cancelled_after_12_hours(db: PgPool) {
+    let ctx = setup(db);
+    let panitia_magang = ctx.panitia_magang().await;
+
+    let (_, a) = ctx.mahasiswa("a@student.ub.ac.id").await;
+    let lewat = ctx.diterima(&a, &panitia_magang).await;
+    ctx.mundurkan(lewat, "12 hours").await;
+
+    let (_, b) = ctx.mahasiswa("b@student.ub.ac.id").await;
+    let belum = ctx.diterima(&b, &panitia_magang).await;
+    ctx.mundurkan(belum, "11 hours 58 minutes").await;
+
+    // Set straight to Diterima without a log row, so updated_at stands in.
+    let (_, c) = ctx.mahasiswa("c@student.ub.ac.id").await;
+    let tanpa_log = ctx.pendaftaran(&c, "Diterima").await;
+    ctx.mundurkan(tanpa_log, "13 hours").await;
+
+    // Other statuses are left alone, however old.
+    let (_, d) = ctx.mahasiswa("d@student.ub.ac.id").await;
+    let lolos = ctx.pendaftaran(&d, "Lolos Seleksi Administrasi").await;
+    ctx.mundurkan(lolos, "30 days").await;
+
+    ctx.email.lock().unwrap().clear();
+    pembatalan::batalkan_yang_kedaluwarsa(&ctx.state).await;
+
+    assert_eq!(ctx.status_of(lewat).await, BATAL);
+    assert_eq!(
+        ctx.last_log(lewat).await,
+        (Some("Diterima".to_string()), BATAL.to_string(), None)
+    );
+    assert_eq!(ctx.status_of(tanpa_log).await, BATAL);
+    assert_eq!(ctx.status_of(belum).await, "Diterima");
+    assert_eq!(ctx.status_of(lolos).await, "Lolos Seleksi Administrasi");
+
+    let mut terkirim = ctx.email_terkirim();
+    terkirim.sort_by(|x, y| x.kepada.cmp(&y.kepada));
+    let kepada: Vec<_> = terkirim.iter().map(|email| email.kepada.as_str()).collect();
+    assert_eq!(kepada, ["a@student.ub.ac.id", "c@student.ub.ac.id"]);
+    let email = &terkirim[0];
+    assert_eq!(email.subjek, format!("Status pendaftaran magang: {BATAL}"));
+    assert!(
+        email
+            .isi
+            .contains("dibatalkan otomatis karena penerimaan tidak dikonfirmasi")
+    );
+    assert!(email.isi.contains("Status lama : Diterima"));
+    let html = email.html.as_ref().unwrap();
+    assert!(html.isi.contains("cid:ikon-gagal"));
+    assert!(!html.isi.contains("PENTING"));
+
+    // A cancelled one cannot be confirmed any more, and nothing happens on the next round.
+    assert_rejected(
+        terima(&ctx.app, &a, lewat).await,
+        StatusCode::CONFLICT,
+        BUKAN_DITERIMA,
+    )
+    .await;
+    ctx.email.lock().unwrap().clear();
+    pembatalan::batalkan_yang_kedaluwarsa(&ctx.state).await;
+    assert!(ctx.email_terkirim().is_empty());
+    assert_eq!(ctx.status_of(belum).await, "Diterima");
 }
 
 #[sqlx::test]

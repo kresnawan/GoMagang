@@ -6,10 +6,20 @@ use super::{
 };
 use crate::{error::AppError, features::auth::User, state::AppState};
 
+/// `GET /api/v1/mahasiswa/data`: mengembalikan data diri mahasiswa yang sedang login.
+///
+/// Datanya sudah dimuat oleh middleware [`require_mahasiswa`](super::middleware::require_mahasiswa)
+/// dan diteruskan lewat extension request, sehingga handler ini tidak perlu query ulang ke
+/// database.
 pub async fn data(Extension(mahasiswa): Extension<Mahasiswa>) -> Json<Mahasiswa> {
     Json(mahasiswa)
 }
 
+/// `PATCH /api/v1/mahasiswa/data`: mengubah sebagian data diri mahasiswa yang sedang login.
+///
+/// Hanya field yang dikirim yang diubah; field lain tetap. Body divalidasi lebih dulu (lihat
+/// [`MahasiswaPatch::validate`]). NIM yang sudah dipakai mahasiswa lain dijawab `409`. Bila
+/// berhasil, data diri terbaru dikembalikan, termasuk field yang tidak diubah.
 pub async fn update_data(
     State(state): State<AppState>,
     user: User,

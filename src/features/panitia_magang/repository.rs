@@ -2,9 +2,11 @@ use sqlx::PgPool;
 
 use super::model::RegisterPanitiaMagang;
 
-/// Creates the pengguna and panitia_magang rows together, with `google_sub` left empty until first login.
+/// Membuat baris `pengguna` dan `panitia_magang` sekaligus dalam satu statement.
 ///
-/// Returns `None` if the email is already taken, in any letter case.
+/// `google_sub` dibiarkan kosong sampai anggota tersebut login pertama kali. Mengembalikan
+/// `id_pengguna` yang baru, atau `None` bila email sudah dipakai, tanpa membedakan huruf
+/// besar-kecil.
 pub async fn register(
     db: &PgPool,
     data: &RegisterPanitiaMagang,

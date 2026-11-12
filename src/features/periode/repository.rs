@@ -4,10 +4,13 @@ use super::model::{
     NewPeriode, Periode, StartCheck, StartResult, StatusPeriode, StopCheck, StopResult,
 };
 
-/// The periods matching the filters, newest first.
+/// Daftar periode yang cocok dengan filter, dari waktu mulai yang paling baru.
 ///
-/// waktu_mulai and waktu_tutup have no time zone and are written in WIB, so they are compared
-/// against the time in Jakarta, and sent out with the +07:00 offset.
+/// Status periode dihitung saat query dijalankan dengan membandingkan waktu sekarang di
+/// Asia/Jakarta terhadap `waktu_mulai` dan `waktu_tutup`. Kedua kolom itu tidak punya zona waktu
+/// dan
+/// disimpan dalam WIB, sehingga dikirim keluar dengan offset `+07:00`. Filter `id` dan `status`
+/// bersifat opsional; `None` berarti tidak difilter.
 pub async fn list(
     db: &PgPool,
     id: Option<i32>,
@@ -37,7 +40,12 @@ pub async fn list(
     .await
 }
 
-/// Saves a period in WIB. Returns `None` if its range touches an existing period.
+/// Menyimpan periode baru dalam WIB.
+///
+/// Mengembalikan id periode baru, atau `None` bila rentangnya beririsan atau bersentuhan dengan
+/// periode lain. Tabel dikunci (`SHARE ROW EXCLUSIVE`) selama transaksi; tanpa kunci ini, dua
+/// request yang rentangnya beririsan bisa sama-sama tidak menemukan irisan lalu sama-sama
+/// tersimpan.
 pub async fn create(db: &PgPool, periode: &NewPeriode) -> Result<Option<i32>, sqlx::Error> {
     let mut tx = db.begin().await?;
 
@@ -72,8 +80,17 @@ pub async fn create(db: &PgPool, periode: &NewPeriode) -> Result<Option<i32>, sq
     Ok(id)
 }
 
-/// Moves waktu_mulai of a period that has not started to the current time in WIB, keeping
-/// waktu_tutup. The new range must not touch another period, the same rule as for a new one.
+/// Memajukan `waktu_mulai` periode yang belum dimulai ke waktu sekarang (WIB), dengan `waktu_tutup`
+/// tetap.
+///
+/// Rentang baru tidak boleh beririsan dengan periode lain, sama seperti aturan periode baru. Tabel
+/// dikunci agar dua request tidak sama-sama menganggap periode belum dimulai. Waktu sekarang
+/// diambil
+/// dengan `clock_timestamp()`, bukan `now()`. `now()` tetap bernilai waktu awal transaksi, sehingga
+/// bisa tertinggal dari periode yang baru saja dimulai oleh request yang memegang kunci sebelumnya.
+///
+/// Mengembalikan hasil berupa [`StartResult`]: berhasil, tidak ditemukan, sudah berlangsung, sudah
+/// selesai, atau beririsan.
 pub async fn start(db: &PgPool, id: i32) -> Result<StartResult, sqlx::Error> {
     let mut tx = db.begin().await?;
 
@@ -131,8 +148,13 @@ pub async fn start(db: &PgPool, id: i32) -> Result<StartResult, sqlx::Error> {
     Ok(StartResult::Started)
 }
 
-/// Moves waktu_tutup of a running period to the current time in WIB, keeping waktu_mulai. The range
-/// only gets shorter, so it cannot come to touch another period.
+/// Memundurkan `waktu_tutup` periode yang sedang berlangsung ke waktu sekarang (WIB), dengan
+/// `waktu_mulai` tetap.
+///
+/// Rentangnya hanya memendek, sehingga tidak mungkin menjadi beririsan dengan periode lain. Tabel
+/// dikunci dan waktu diambil dengan `clock_timestamp()`, dengan alasan yang sama seperti
+/// [`start`]. Mengembalikan hasil berupa [`StopResult`]: berhasil, tidak ditemukan, belum dimulai,
+/// atau sudah selesai.
 pub async fn stop(db: &PgPool, id: i32) -> Result<StopResult, sqlx::Error> {
     let mut tx = db.begin().await?;
 

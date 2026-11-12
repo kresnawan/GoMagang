@@ -2,6 +2,7 @@ mod ekspor;
 mod handler;
 mod model;
 mod notifikasi;
+mod pembatalan;
 mod repository;
 mod routes;
 mod storage;
@@ -9,6 +10,6 @@ mod tautan;
 #[cfg(test)]
 mod tests;
 
-pub use model::JENIS_BERKAS_TAMBAHAN;
+pub use pembatalan::spawn_pembatalan_otomatis;
 pub use routes::routes;
 pub use tautan::TautanBerkas;

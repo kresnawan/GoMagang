@@ -3,6 +3,11 @@ use time::Date;
 
 use super::model::{DataPendaftaran, SuratBaru, SuratTersimpan};
 
+/// Data pendaftaran yang dibutuhkan surat: pemilik, status, data diri mahasiswa, posisi, dan nama
+/// perusahaan.
+///
+/// Bisa dijalankan di pool maupun di dalam transaksi. Mengembalikan `None` bila pendaftaran tidak
+/// ada.
 pub async fn find_pendaftaran<'e>(
     db: impl PgExecutor<'e>,
     id_pendaftaran: i32,
@@ -22,8 +27,10 @@ pub async fn find_pendaftaran<'e>(
     .await
 }
 
-/// Holds back status changes and other first downloads of this pendaftaran until the transaction
-/// ends, so that a surat is issued once, and only while the pendaftaran is Aktif.
+/// Mengunci baris pendaftaran (`FOR UPDATE`) sampai transaksi selesai.
+///
+/// Perubahan status dan unduhan pertama lain untuk pendaftaran ini tertahan selama kunci dipegang,
+/// sehingga surat hanya terbit sekali dan hanya selama pendaftaran berstatus `Aktif`.
 pub async fn lock_pendaftaran(
     conn: &mut PgConnection,
     id_pendaftaran: i32,
@@ -37,6 +44,8 @@ pub async fn lock_pendaftaran(
 
 const KOLOM_SURAT: &str = "SELECT id_surat, nama_berkas, isi, tanda_tangan FROM surat_keterangan";
 
+/// Surat yang sudah terbit untuk sebuah pendaftaran, atau `None`. Bisa dijalankan di pool maupun di
+/// dalam transaksi.
 pub async fn find_by_pendaftaran<'e>(
     db: impl PgExecutor<'e>,
     id_pendaftaran: i32,
@@ -49,6 +58,7 @@ pub async fn find_by_pendaftaran<'e>(
     .await
 }
 
+/// Surat dengan id ini, atau `None`. Dipakai verifikasi lewat kode QR.
 pub async fn find_by_id(db: &PgPool, id_surat: i32) -> Result<Option<SuratTersimpan>, sqlx::Error> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "{KOLOM_SURAT} WHERE id_surat = $1"
@@ -58,6 +68,8 @@ pub async fn find_by_id(db: &PgPool, id_surat: i32) -> Result<Option<SuratTersim
     .await
 }
 
+/// Surat yang hash SHA-256 berkasnya sama dengan `hash`, atau `None`. Dipakai verifikasi lewat
+/// unggahan berkas.
 pub async fn find_by_hash(db: &PgPool, hash: &str) -> Result<Option<SuratTersimpan>, sqlx::Error> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "{KOLOM_SURAT} WHERE hash_berkas = $1"
@@ -67,15 +79,18 @@ pub async fn find_by_hash(db: &PgPool, hash: &str) -> Result<Option<SuratTersimp
     .await
 }
 
-/// Today in WIB, the date printed on the surat.
+/// Tanggal hari ini dalam WIB menurut jam database, yaitu tanggal yang dicetak di surat.
 pub async fn hari_ini(conn: &mut PgConnection) -> Result<Date, sqlx::Error> {
     sqlx::query_scalar("SELECT (now() AT TIME ZONE 'Asia/Jakarta')::date")
         .fetch_one(conn)
         .await
 }
 
-/// Takes the next id ahead of the insert, because the number and the QR printed in the file
-/// need it before the row can be written.
+/// Mengambil id surat berikutnya dari sequence sebelum baris disimpan.
+///
+/// Id dibutuhkan lebih dulu karena nomor surat dan QR code yang dicetak di berkas memuatnya,
+/// sedangkan baris baru bisa disimpan setelah berkasnya jadi. Id yang sudah diambil tidak dipakai
+/// lagi walaupun transaksinya batal.
 pub async fn next_id_surat(conn: &mut PgConnection) -> Result<i32, sqlx::Error> {
     sqlx::query_scalar(
         "SELECT nextval(pg_get_serial_sequence('surat_keterangan', 'id_surat'))::int",
@@ -84,6 +99,7 @@ pub async fn next_id_surat(conn: &mut PgConnection) -> Result<i32, sqlx::Error> 
     .await
 }
 
+/// Menyimpan baris surat keterangan beserta isi JSON, tanda tangan, dan hash berkasnya.
 pub async fn insert(conn: &mut PgConnection, surat: &SuratBaru) -> Result<(), sqlx::Error> {
     sqlx::query(
         "INSERT INTO surat_keterangan

@@ -75,6 +75,11 @@ pub struct UpdateStatus {
 }
 
 impl UpdateStatus {
+    /// Memastikan status yang diminta adalah salah satu dari tujuh status pendaftaran yang dikenal.
+    ///
+    /// Status yang tidak dikenal dijawab [`AppError::Validation`]. Boleh tidaknya perpindahan dari
+    /// status
+    /// lama ke status ini diperiksa terpisah oleh [`panitia_magang_can_change`].
     pub fn validate(self) -> Result<Self, AppError> {
         if !STATUS_PENDAFTARAN.contains(&self.status.as_str()) {
             return Err(AppError::Validation("Status tidak dikenal."));
@@ -83,7 +88,15 @@ impl UpdateStatus {
     }
 }
 
-/// The changes Panitia Magang can make. Diterima to Aktif is left out, as the mahasiswa confirms that one.
+/// Mengecek apakah Panitia Magang boleh mengubah status dari `lama` ke `baru`.
+///
+/// Perubahan yang diizinkan:
+/// - `Menunggu Verifikasi` → `Lolos Seleksi Administrasi` atau `Tidak Lolos`
+/// - `Lolos Seleksi Administrasi` → `Diterima` atau `Tidak Lolos`
+/// - `Aktif` → `Selesai`
+///
+/// `Diterima` → `Aktif` tidak termasuk, karena perubahan itu dilakukan mahasiswa lewat konfirmasi
+/// penerimaan. Perubahan ke status yang sama juga ditolak.
 pub fn panitia_magang_can_change(lama: &str, baru: &str) -> bool {
     matches!(
         (lama, baru),
@@ -111,6 +124,8 @@ pub enum AcceptResult {
     NotOwner,
     NotDiterima,
     HasAktif,
+    /// The 12 hours to confirm have passed.
+    Kedaluwarsa,
 }
 
 /// One jadwal for every pendaftaran listed. The response sends back the same fields, as saved.
@@ -124,6 +139,14 @@ pub struct SimpanJadwal {
 }
 
 impl SimpanJadwal {
+    /// Memvalidasi dan merapikan jadwal seleksi substansi.
+    ///
+    /// - `id_pendaftaran`: diurutkan, duplikat dibuang, dan tidak boleh kosong.
+    /// - `tanggal`: format `YYYY-MM-DD` dan tidak boleh sebelum hari ini menurut WIB.
+    /// - `jam`: format `HH:MM`.
+    /// - `lokasi`: 1-255 karakter setelah spasi di awal dan akhir dibuang.
+    ///
+    /// Pelanggaran dijawab [`AppError::Validation`].
     pub fn validate(mut self) -> Result<Self, AppError> {
         rapikan_id_pendaftaran(&mut self.id_pendaftaran)?;
 
@@ -155,6 +178,12 @@ pub struct SimpanPlotting {
 }
 
 impl SimpanPlotting {
+    /// Memvalidasi dan merapikan data plotting DPM (Dosen Pembimbing Magang).
+    ///
+    /// - `id_pendaftaran`: diurutkan, duplikat dibuang, dan tidak boleh kosong.
+    /// - `nama_dpm` dan `kontak_dpm`: 1-255 karakter setelah spasi di awal dan akhir dibuang.
+    ///
+    /// Pelanggaran dijawab [`AppError::Validation`].
     pub fn validate(mut self) -> Result<Self, AppError> {
         rapikan_id_pendaftaran(&mut self.id_pendaftaran)?;
 
@@ -176,7 +205,10 @@ impl SimpanPlotting {
     }
 }
 
-/// Puts the ids in order without duplicates, and refuses an empty list.
+/// Mengurutkan daftar id pendaftaran dan membuang duplikatnya.
+///
+/// Urutan yang tetap juga membuat penguncian baris di database selalu berurutan, sehingga dua
+/// request tidak saling menunggu (deadlock). Daftar kosong dijawab [`AppError::Validation`].
 pub(super) fn rapikan_id_pendaftaran(id_pendaftaran: &mut Vec<i32>) -> Result<(), AppError> {
     id_pendaftaran.sort_unstable();
     id_pendaftaran.dedup();
@@ -214,10 +246,13 @@ pub struct Halaman {
 }
 
 impl Halaman {
+    /// Jumlah baris per halaman, untuk `LIMIT` di SQL.
     pub fn limit(self) -> i64 {
         i64::from(self.rows)
     }
 
+    /// Jumlah baris yang dilewati sebelum halaman ini, untuk `OFFSET` di SQL. Halaman dimulai dari
+    /// 1.
     pub fn offset(self) -> i64 {
         (i64::from(self.page) - 1) * i64::from(self.rows)
     }
@@ -236,6 +271,10 @@ pub struct FilterPendaftaran {
 }
 
 impl ListQuery {
+    /// Halaman yang diminta lewat query `p` (nomor halaman, default 1) dan `r` (baris per halaman,
+    /// default 25).
+    ///
+    /// Nilai di bawah 1 dijawab [`AppError::Validation`].
     pub fn halaman(&self) -> Result<Halaman, AppError> {
         let page = self.p.unwrap_or(1);
         let rows = self.r.unwrap_or(DEFAULT_ROWS);
@@ -246,7 +285,12 @@ impl ListQuery {
         Ok(Halaman { page, rows })
     }
 
-    /// The filters asked for, limited to this mahasiswa if one is given.
+    /// Menyusun filter dari parameter query, dibatasi ke pendaftaran milik `id_pengguna` bila
+    /// diisi.
+    ///
+    /// Mahasiswa selalu memanggil ini dengan id-nya sendiri, sehingga hanya bisa melihat
+    /// pendaftarannya.
+    /// Kotak pencarian `s` yang kosong atau hanya berisi spasi dianggap tidak mencari apa pun.
     pub fn filter(&self, id_pengguna: Option<i32>) -> FilterPendaftaran {
         FilterPendaftaran {
             id_pengguna,
@@ -276,6 +320,11 @@ pub struct DaftarPendaftaran {
 }
 
 impl DaftarPendaftaran {
+    /// Menyusun respons daftar pendaftaran beserta informasi halaman.
+    ///
+    /// `total_pages` dihitung dari `total` dibagi `rows`, dibulatkan ke atas karena halaman
+    /// terakhir
+    /// bisa tidak penuh. Nilainya 0 bila tidak ada data.
     pub fn new(data: Vec<PendaftaranRingkas>, halaman: Halaman, total: i64) -> Self {
         let rows = i64::from(halaman.rows);
         Self {
@@ -301,6 +350,9 @@ pub struct InfoPendaftaran {
     pub id_periode: i32,
     #[sqlx(flatten)]
     pub perusahaan: Perusahaan,
+    /// While the status is Diterima: until when the mahasiswa may confirm, 12 hours after it was
+    /// set. Past it the pendaftaran is cancelled. None in any other status.
+    pub batas_konfirmasi: Option<String>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -399,8 +451,13 @@ pub struct BerkasBaru {
 }
 
 impl BerkasBaru {
-    /// The name comes from the server, never from the upload, so it cannot point outside the
-    /// upload folder. The owner makes the file identifiable, and the random part unguessable.
+    /// Menyiapkan berkas yang akan disimpan, dengan nama berkas `{id_pengguna}_{slug}_{acak}.pdf`.
+    ///
+    /// Nama berkas dibuat server, tidak pernah diambil dari unggahan, sehingga tidak bisa menunjuk
+    /// ke
+    /// luar folder upload. `id_pengguna` membuat pemilik berkas mudah dikenali, sedangkan 128 bit
+    /// acak
+    /// membuat nama berkas tidak bisa ditebak.
     fn new(jenis: &'static str, slug: &str, id_pengguna: i32, isi: Bytes) -> Self {
         let acak = rand::random::<u128>();
         Self {
@@ -420,6 +477,16 @@ pub struct FormPendaftaran {
 }
 
 impl FormPendaftaran {
+    /// Membaca form pendaftaran dari body multipart.
+    ///
+    /// Field yang diterima:
+    /// - `id_posisi` (wajib): angka.
+    /// - `surat_dpa` dan `cv` (wajib): masing-masing satu PDF maksimal 2 MB.
+    /// - `berkas_tambahan` (opsional, boleh diulang): maksimal 5 PDF, masing-masing maksimal 2 MB.
+    ///   Bagian kosong, seperti yang dikirim browser untuk input file yang tidak diisi, dilewati.
+    ///
+    /// Field yang tidak dikenal, atau field wajib yang dikirim lebih dari sekali, ditolak. Semua
+    /// pelanggaran dijawab [`AppError::Validation`] dengan pesan untuk pengguna.
     pub async fn read(mut multipart: Multipart) -> Result<Self, AppError> {
         let mut id_posisi = None;
         let mut surat_dpa = None;
@@ -462,7 +529,9 @@ impl FormPendaftaran {
         })
     }
 
-    /// The required files first, then the extra ones in the order they were sent.
+    /// Daftar berkas yang akan disimpan untuk pendaftaran ini: Surat Pernyataan DPA dan CV lebih
+    /// dulu,
+    /// lalu berkas tambahan sesuai urutan pengiriman.
     pub fn berkas(&self, id_pengguna: i32) -> Vec<BerkasBaru> {
         let mut berkas = vec![
             BerkasBaru::new(
@@ -487,6 +556,7 @@ impl FormPendaftaran {
 
 const BERKAS_WAJIB: AppError = AppError::Validation("Surat Pernyataan DPA dan CV wajib diunggah.");
 
+/// Membaca field `id_posisi` sebagai angka. Spasi di sekitarnya diabaikan.
 async fn read_id(field: Field<'_>) -> Result<i32, AppError> {
     let text = field.text().await.map_err(read_error)?;
     text.trim()
@@ -494,6 +564,8 @@ async fn read_id(field: Field<'_>) -> Result<i32, AppError> {
         .map_err(|_| AppError::Validation("id_posisi harus berupa angka."))
 }
 
+/// Membaca field berkas wajib. Berkas kosong dianggap tidak diunggah, dan isinya diperiksa dengan
+/// [`check_pdf`].
 async fn read_pdf(field: Field<'_>) -> Result<Bytes, AppError> {
     let isi = field.bytes().await.map_err(read_error)?;
     if isi.is_empty() {
@@ -502,6 +574,10 @@ async fn read_pdf(field: Field<'_>) -> Result<Bytes, AppError> {
     check_pdf(isi)
 }
 
+/// Memeriksa ukuran dan format berkas.
+///
+/// Ukuran maksimal 2 MB. Format dicek dari isinya, yaitu harus diawali tanda `%PDF-`, karena nama
+/// berkas dan content type dikirim oleh klien dan bisa dipalsukan.
 fn check_pdf(isi: Bytes) -> Result<Bytes, AppError> {
     if isi.len() > MAX_BERKAS_SIZE {
         return Err(AppError::Validation(TOO_LARGE));
@@ -513,6 +589,8 @@ fn check_pdf(isi: Bytes) -> Result<Bytes, AppError> {
     Ok(isi)
 }
 
+/// Menerjemahkan error pembacaan multipart: body yang melebihi batas ukuran dijawab "Ukuran berkas
+/// maksimal 2 MB.", dan error lain dijawab "Format multipart tidak valid.".
 fn read_error(err: MultipartError) -> AppError {
     if err.status() == StatusCode::PAYLOAD_TOO_LARGE {
         AppError::Validation(TOO_LARGE)

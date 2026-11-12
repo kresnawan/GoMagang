@@ -27,7 +27,10 @@ use crate::{
 
 const STATUS_AKTIF: &str = "Aktif";
 
-/// Without SURAT_SIGNING_KEY nothing can be signed or checked.
+/// Mengambil penanda tangan surat dari state.
+///
+/// Tanpa `SURAT_SIGNING_KEY`, tidak ada surat yang bisa ditandatangani atau diperiksa, sehingga
+/// semua endpoint surat keterangan dijawab [`AppError::ServiceUnavailable`] (`503`).
 fn penanda(state: &AppState) -> Result<Arc<PenandaSurat>, AppError> {
     state
         .penanda_surat
@@ -35,8 +38,18 @@ fn penanda(state: &AppState) -> Result<Arc<PenandaSurat>, AppError> {
         .ok_or(AppError::ServiceUnavailable)
 }
 
-/// Sends the surat of a pendaftaran to the mahasiswa it belongs to, or to Panitia Magang. The first
-/// download of an Aktif pendaftaran issues it; every later one sends the same file.
+/// `GET /api/v1/pendaftaran/{id}/surat-keterangan`: mengunduh surat keterangan sebuah pendaftaran.
+///
+/// Bisa diunduh oleh mahasiswa pemilik pendaftaran (milik orang lain dijawab `403`) dan oleh
+/// Panitia
+/// Magang. Unduhan pertama untuk pendaftaran `Aktif` menerbitkan surat (lihat [`terbitkan`]).
+/// Unduhan
+/// berikutnya selalu mengirim berkas yang sama persis, sehingga hash-nya tetap cocok saat
+/// diverifikasi.
+///
+/// Respons berupa PDF dengan nama berkas `surat-keterangan-magang-<nim>.pdf`, dan header
+/// `Cache-Control: private, no-store` agar tidak ada cache yang menyimpan salinannya. Pendaftaran
+/// yang tidak ada dijawab `404`, dan yang tidak `Aktif` saat surat belum terbit dijawab `409`.
 pub async fn unduh(
     State(state): State<AppState>,
     user: User,
@@ -84,8 +97,22 @@ pub async fn unduh(
     Ok((headers, isi_berkas))
 }
 
-/// Builds, signs and stores the surat. Runs under a lock on the pendaftaran, so two first
-/// downloads at once still give one surat, and a status change cannot slip in between.
+/// Menyusun, menandatangani, dan menyimpan surat keterangan baru.
+///
+/// Dalam satu transaksi dengan baris pendaftaran dikunci:
+/// 1. Bila surat ternyata sudah diterbitkan oleh request lain yang memegang kunci lebih dulu, surat
+///    itu yang dikembalikan. Dengan begitu, dua unduhan pertama yang bersamaan tetap menghasilkan
+///    satu surat.
+/// 2. Status harus `Aktif`, dan statusnya tidak bisa berubah selama proses karena terkunci.
+/// 3. Tanggal surat (WIB) dan id surat diambil lebih dulu, karena keduanya dicetak di nomor surat
+///    dan
+///    QR code.
+/// 4. Isi surat disusun lalu dibekukan sebagai JSON, ditandatangani, dan di-render menjadi PDF
+///    dengan QR code berisi tautan verifikasi.
+/// 5. Baris disimpan bersama hash SHA-256 berkasnya, lalu berkas ditulis ke folder upload.
+///
+/// Berkas ditulis paling akhir: bila penulisan gagal, transaksi dibatalkan, dan bila commit gagal,
+/// berkas dihapus lagi.
 async fn terbitkan(
     state: &AppState,
     penanda: &PenandaSurat,
@@ -166,6 +193,13 @@ async fn terbitkan(
     })
 }
 
+/// Menyusun isi surat dari data pendaftaran, id surat, dan tanggal surat.
+///
+/// Data yang belum tersedia di database (pejabat, alamat perusahaan, jenis program, masa magang,
+/// format nomor) diambil dari [`templat`] yang masih berupa MOCK. Program studi ditulis dengan
+/// awalan
+/// `S1`. Dijawab `409` bila nama, NIM, atau program studi kosong; seharusnya tidak terjadi, karena
+/// mendaftar mensyaratkan data diri lengkap dan data itu tidak bisa dikosongkan lagi.
 fn isi_surat(
     pendaftaran: DataPendaftaran,
     id_surat: i32,
@@ -200,6 +234,10 @@ fn isi_surat(
     })
 }
 
+/// Membaca kembali isi surat dari JSON yang tersimpan.
+///
+/// JSON yang tidak bisa dibaca (misalnya diubah manual di database) dicatat ke log dan dijawab
+/// [`AppError::Internal`].
 fn baca_isi(surat: &SuratTersimpan) -> Result<IsiSurat, AppError> {
     serde_json::from_str(&surat.isi).map_err(|err| {
         eprintln!("surat {} holds unreadable content: {err}", surat.id_surat);
@@ -207,6 +245,8 @@ fn baca_isi(surat: &SuratTersimpan) -> Result<IsiSurat, AppError> {
     })
 }
 
+/// Hash SHA-256 dari `isi` dalam 64 karakter heksadesimal huruf kecil, sesuai format kolom
+/// `hash_berkas`.
 fn hex_sha256(isi: &[u8]) -> String {
     Sha256::digest(isi)
         .iter()
@@ -214,8 +254,12 @@ fn hex_sha256(isi: &[u8]) -> String {
         .collect()
 }
 
-/// Only a row whose signature still matches its content counts. A row edited in the database,
-/// or a code that was not issued here, fails like an unknown one.
+/// Mengembalikan isi surat hanya bila tanda tangannya masih cocok dengan isi yang tersimpan.
+///
+/// `tanda_tangan` adalah tanda tangan dari kode QR; bila `None` (verifikasi lewat berkas), dipakai
+/// tanda tangan yang tersimpan. Baris yang diubah langsung di database, atau kode yang tidak
+/// diterbitkan server ini, dijawab `404` sama seperti surat yang tidak ada, sehingga tidak ada
+/// informasi yang bocor.
 fn isi_asli(
     penanda: &PenandaSurat,
     surat: Option<SuratTersimpan>,
@@ -229,7 +273,12 @@ fn isi_asli(
     Ok(Json(baca_isi(&surat)?))
 }
 
-/// Public: what the QR on a surat links to.
+/// `GET /api/v1/surat-keterangan/verifikasi?kode=...` (publik): memeriksa surat lewat kode di QR
+/// code.
+///
+/// Kode `{id_surat}.{tanda_tangan}` diurai, baris surat dicari dengan id-nya, lalu tanda tangan
+/// dicocokkan dengan isi surat. Bila sah, isi surat dikembalikan. Kode yang rusak, tidak dikenal,
+/// atau tanda tangannya tidak cocok dijawab `404`.
 pub async fn verifikasi(
     State(state): State<AppState>,
     Query(query): Query<KodeQuery>,
@@ -242,8 +291,12 @@ pub async fn verifikasi(
 
 const BERKAS_WAJIB: AppError = AppError::Validation("Pilih berkas PDF surat keterangan.");
 
-/// Public: recognises an uploaded PDF as an issued surat only if it is the same file, byte for
-/// byte.
+/// `POST /api/v1/surat-keterangan/verifikasi` (publik): memeriksa surat lewat unggahan berkas PDF.
+///
+/// Berkas dikirim sebagai multipart di field `berkas`. Surat dikenali hanya bila berkasnya sama
+/// persis byte demi byte dengan berkas yang diterbitkan, dicocokkan lewat hash SHA-256, dan tanda
+/// tangan barisnya masih sah. Berkas kosong atau tidak dikirim dijawab `422`; berkas yang tidak
+/// dikenali dijawab `404`.
 pub async fn verifikasi_berkas(
     State(state): State<AppState>,
     mut multipart: Multipart,
@@ -262,6 +315,8 @@ pub async fn verifikasi_berkas(
     isi_asli(&penanda, surat, None)
 }
 
+/// Menerjemahkan error pembacaan multipart: body yang melebihi batas ukuran dijawab pesan "Berkas
+/// terlalu besar", dan error lain dianggap berkas tidak dikirim dengan benar.
 fn read_error(err: MultipartError) -> AppError {
     if err.status() == StatusCode::PAYLOAD_TOO_LARGE {
         AppError::Validation("Berkas terlalu besar untuk sebuah surat keterangan.")
@@ -270,7 +325,11 @@ fn read_error(err: MultipartError) -> AppError {
     }
 }
 
-/// Public: lets anyone check a signature without trusting this server's answer.
+/// `GET /api/v1/surat-keterangan/kunci-publik` (publik): kunci publik Ed25519 untuk memeriksa tanda
+/// tangan surat.
+///
+/// Dengan kunci ini, siapa pun bisa memverifikasi tanda tangan secara mandiri tanpa mempercayai
+/// jawaban server ini.
 pub async fn kunci_publik(State(state): State<AppState>) -> Result<Json<KunciPublik>, AppError> {
     Ok(Json(KunciPublik {
         algoritma: "Ed25519",

@@ -51,6 +51,17 @@ pub struct SmtpConfig {
 }
 
 impl SmtpConfig {
+    /// Membaca konfigurasi SMTP dari environment.
+    ///
+    /// Mengembalikan `None` bila `SMTP_HOST` kosong atau tidak di-set; artinya pengiriman email
+    /// dimatikan. Bila `SMTP_HOST` ada:
+    /// - `SMTP_PORT` opsional; bila kosong, port mengikuti mode TLS.
+    /// - `SMTP_TLS` bernilai `starttls` (default), `tls`, atau `none`.
+    /// - `SMTP_USERNAME` dan `SMTP_PASSWORD` opsional.
+    /// - `SMTP_FROM` wajib.
+    ///
+    /// # Panics
+    /// Panic bila `SMTP_PORT` bukan angka, `SMTP_TLS` tidak dikenal, atau `SMTP_FROM` tidak di-set.
     fn from_env() -> Option<Self> {
         let host = env_nonempty("SMTP_HOST")?;
         let port = env_nonempty("SMTP_PORT").map(|port| {
@@ -75,11 +86,32 @@ impl SmtpConfig {
     }
 }
 
+/// Membaca variabel environment `name`, dengan nilai kosong dianggap sama dengan tidak di-set.
+///
+/// Dengan begitu, baris seperti `SMTP_HOST=` di file `.env` tidak menyalakan fitur secara tidak
+/// sengaja.
 fn env_nonempty(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|value| !value.is_empty())
 }
 
 impl Config {
+    /// Membaca seluruh konfigurasi aplikasi dari variabel environment.
+    ///
+    /// Variabel wajib: `DATABASE_URL`, `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, dan `JWT_SECRET`
+    /// (minimal 32 byte). Variabel lain punya nilai default:
+    /// - `CORS_ALLOWED_ORIGINS`: daftar origin dipisah koma, default `http://localhost:5173`.
+    /// - `GOOGLE_REDIRECT_URI`: default `http://localhost:3000/auth/google`. Bila diawali
+    ///   `https://`,
+    ///   cookie sesi diberi atribut `Secure`.
+    /// - `FRONTEND_URL`: default `http://localhost:5173`; garis miring di akhir dibuang.
+    /// - `UPLOAD_DIR`: folder penyimpanan berkas, default `uploads`.
+    /// - `ADMIN_SECRET` (minimal 32 byte bila di-set), `SURAT_SIGNING_KEY`, dan variabel `SMTP_*`
+    ///   bersifat opsional.
+    ///
+    /// # Panics
+    /// Panic bila variabel wajib tidak ada, secret terlalu pendek, atau ada origin CORS yang tidak
+    /// valid,
+    /// supaya kesalahan konfigurasi langsung terlihat saat server start.
     pub fn from_env() -> Self {
         let origins = std::env::var("CORS_ALLOWED_ORIGINS")
             .unwrap_or_else(|_| DEFAULT_CORS_ALLOWED_ORIGINS.to_string());
@@ -127,6 +159,13 @@ impl Config {
     }
 }
 
+/// Memecah daftar origin CORS yang dipisah koma menjadi daftar `HeaderValue`.
+///
+/// Spasi di sekitar setiap origin dibuang dan entri kosong diabaikan, sehingga
+/// `"http://a.test, http://b.test,"` tetap valid.
+///
+/// # Panics
+/// Panic bila ada origin yang tidak bisa dijadikan header HTTP.
 fn parse_origins(origins: &str) -> Vec<HeaderValue> {
     origins
         .split(',')

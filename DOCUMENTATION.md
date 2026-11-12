@@ -24,8 +24,6 @@ Kolom **Frontend** menunjukkan apakah `gomagang-web` sudah memanggil endpoint it
 | `POST` | [`/auth/logout`](#post-authlogout) | Logout dari perangkat yang dipakai | Publik | ✅ Jadi | Tersambung |
 | `GET` | [`/api/v1/mahasiswa/data`](#get-apiv1mahasiswadata) | Mengambil data mahasiswa yang sedang login | Mahasiswa | ✅ Jadi | Tersambung |
 | `PATCH` | [`/api/v1/mahasiswa/data`](#patch-apiv1mahasiswadata) | Mengubah sebagian data mahasiswa yang sedang login | Mahasiswa | ✅ Jadi | Tersambung |
-| `DELETE` | [`/api/v1/mahasiswa`](#delete-apiv1mahasiswa-sementara) | Menghapus **semua** mahasiswa dan semua datanya, untuk uji coba (sementara) | `ADMIN_SECRET` | ✅ Jadi | Tidak dipakai, lewat `curl` |
-| `POST` | [`/api/v1/mahasiswa/seed`](#post-apiv1mahasiswaseed-sementara) | Menambahkan 50 mahasiswa acak, masing-masing dengan 1 pendaftaran dan berkas PDF contoh, untuk uji coba (sementara) | `ADMIN_SECRET` | ✅ Jadi | Tidak dipakai, lewat `curl` |
 | `GET` | [`/api/v1/posisi`](#get-apiv1posisi) | Daftar posisi magang | Mahasiswa, Panitia Magang | ✅ Jadi | Tersambung: halaman Pendaftaran dan Katalog |
 | `POST` | [`/api/v1/posisi`](#post-apiv1posisi) | Membuat posisi magang | Panitia Magang | ✅ Jadi | Tersambung: halaman Katalog |
 | `PATCH` | [`/api/v1/posisi/{id}`](#patch-apiv1posisiid) | Mengubah nama, kuota, dan deskripsi posisi magang | Panitia Magang | ✅ Jadi | Tersambung: halaman Katalog |
@@ -74,7 +72,6 @@ Kolom **Frontend** menunjukkan apakah `gomagang-web` sudah memanggil endpoint it
 | Periode | ✅ Baca, tambah, mulai, dan hentikan | Tersambung |
 | Perusahaan mitra | ✅ Baca, tambah, ubah nama, dan sembunyikan | Tersambung |
 | Pendaftaran Panitia Magang (`POST /api/v1/panitia-magang`) | ✅ Sementara, lewat `curl` | Tidak dipakai |
-| Data uji coba (`DELETE /api/v1/mahasiswa` dan `POST /api/v1/mahasiswa/seed`) | ✅ Sementara, lewat `curl` | Tidak dipakai |
 | Pendaftaran mahasiswa | ✅ Kirim, daftar, detail, unduh berkas, dan konfirmasi penerimaan | Tersambung |
 | Pengelolaan pendaftar oleh Panitia Magang | ✅ Baca, cari, saring, ubah status, jadwal seleksi, plotting DPM, dan ekspor Excel | Tersambung |
 | Surat keterangan magang | 🟡 Dibuat dari template, ditandatangani, dan bisa diverifikasi, tapi sebagian isinya masih mockup | Tersambung: unduh di detail pendaftaran dan halaman verifikasi publik |
@@ -274,128 +271,6 @@ Kalau ada satu field yang tidak valid, tidak ada field lain yang ikut tersimpan.
 | `409` | NIM sudah dipakai mahasiswa lain |
 | `422` | Isi body ditolak |
 
-### `DELETE /api/v1/mahasiswa` (sementara)
-
-Menghapus **semua** mahasiswa beserta semua datanya, untuk uji coba. **Penghapusan ini permanen, dan berlaku juga untuk akun mahasiswa sungguhan.** Endpoint ini sementara, dan sebaiknya dihapus sebelum aplikasi dipakai sungguhan.
-
-Route ini **hanya ada kalau env `ADMIN_SECRET` di-set**. Tanpa env itu, responsnya `404`. Header secret-nya tidak diizinkan CORS, jadi endpoint ini dipanggil lewat `curl`, bukan dari browser.
-
-**Header:** `X-Admin-Secret`
-
-Tanpa body dan tanpa query. Query apa pun ditolak `400`, supaya perintah lama seperti `?email=...` yang maksudnya untuk satu orang tidak menghapus semua mahasiswa.
-
-**Contoh:**
-```bash
-curl -X DELETE http://localhost:3000/api/v1/mahasiswa \
-  -H "X-Admin-Secret: $ADMIN_SECRET"
-```
-
-**Yang dihapus:**
-- Baris `mahasiswa`, serta `pengguna` dan `token_refresh` milik mereka, jadi semua sesi login mahasiswa ikut berakhir
-- Semua `pendaftaran`, apa pun statusnya, beserta `log_status`, `berkas_pendaftaran`, `jadwal_seleksi_substansi`, `surat_keterangan`, `plotting_dpm`, dan `penyetaraan_mk`
-- File berkas pendaftaran dan file surat keterangan di folder upload. Keduanya dihitung di `jumlah_berkas`
-
-**Yang tidak dihapus:** akun Panitia Magang, posisi, periode, perusahaan, dan `mata_kuliah_konversi`.
-
-**Urutan:** semua baris dihapus dalam satu transaksi, lalu file dihapus setelah transaksi berhasil. Kalau transaksi gagal, baris dan file tetap utuh. Kalau file gagal dihapus, barisnya sudah terlanjur hilang, dan jumlahnya dilaporkan di `jumlah_berkas_gagal`. Baris berkas yang filenya memang sudah tidak ada, misalnya hasil [`POST /api/v1/mahasiswa/seed`](#post-apiv1mahasiswaseed-sementara) sebelum 9 November 2026 yang tidak punya file, tetap dihitung di `jumlah_berkas`.
-
-Access token lama tetap sah sampai habis, paling lama 15 menit: `GET /auth/me` masih berhasil, tapi endpoint yang memeriksa peran menjawab `403`. Saat login lagi, mahasiswa itu dibuat ulang sebagai akun baru dengan `id_pengguna` baru dan data diri kosong.
-
-**Respons `200`:** tetap `200` walaupun tidak ada mahasiswa, dengan semua jumlah bernilai `0`.
-```json
-{
-  "jumlah_mahasiswa": 201,
-  "jumlah_pendaftaran": 201,
-  "jumlah_berkas": 402,
-  "jumlah_berkas_gagal": 0
-}
-```
-
-| Status | Arti |
-|---|---|
-| `400` | Ada query yang dikirim. Body-nya teks biasa dari framework |
-| `403` | Header `X-Admin-Secret` tidak ada atau salah |
-| `404` | `ADMIN_SECRET` tidak di-set di server |
-| `500` | Terjadi kesalahan di server, dan tidak ada data yang terhapus |
-
-### `POST /api/v1/mahasiswa/seed` (sementara)
-
-Menambahkan 50 mahasiswa dengan data acak, masing-masing dengan 1 pendaftaran berstatus `Menunggu Verifikasi` dan berkas PDF contoh, untuk uji coba. Endpoint ini sementara, dan sebaiknya dihapus sebelum aplikasi dipakai sungguhan.
-
-Route ini **hanya ada kalau env `ADMIN_SECRET` di-set**. Tanpa env itu, responsnya `404`. Header secret-nya tidak diizinkan CORS, jadi endpoint ini dipanggil lewat `curl`, bukan dari browser.
-
-**Header:** `X-Admin-Secret`
-
-Tanpa body.
-
-**Contoh:**
-```bash
-curl -X POST http://localhost:3000/api/v1/mahasiswa/seed \
-  -H "X-Admin-Secret: $ADMIN_SECRET"
-```
-
-**Data yang dibuat untuk setiap mahasiswa:**
-
-| Data | Isi |
-|---|---|
-| `email` | `{nama}.{nama belakang}.{nim}@student.ub.ac.id`, huruf kecil. Ini bukan akun Google sungguhan, jadi tidak bisa dipakai login |
-| `nama` | Kombinasi acak nama depan dan belakang, dan bisa sama antar mahasiswa |
-| `nim` | 15 digit acak |
-| `program_studi` | Acak dari 5 program studi yang valid |
-| `ipk` | Acak, 2.50 sampai 4.00 |
-| `no_hp` | `08` diikuti 10 digit acak |
-| `jenis_kelamin` | Acak, `L` atau `P` |
-| `semester` | Acak, 5 sampai 8 |
-| `pendaftaran` | Status `Menunggu Verifikasi`, dengan satu baris `log_status` |
-| `berkas_pendaftaran` | `Surat Pernyataan DPA` dan `CV`, ditambah 0 sampai 3 `Portfolio dan Berkas Tambahan`. Semuanya file PDF sungguhan di folder upload, lihat di bawah |
-
-**Berkas:** setiap pendaftaran selalu punya `Surat Pernyataan DPA` dan `CV`. Sebagian mahasiswa juga melampirkan berkas tambahan, dengan jenis `Portfolio dan Berkas Tambahan` seperti di [`POST /api/v1/pendaftaran`](#post-apiv1pendaftaran):
-
-| Berkas tambahan | Mahasiswa |
-|---|---|
-| Tidak ada, hanya CV dan Surat Pernyataan DPA | 12 atau 13 |
-| 1 file | 12 atau 13 |
-| 2 file | 12 atau 13 |
-| 3 file | 12 atau 13 |
-
-Mahasiswa mana yang mendapat berapa berkas tambahan dipilih acak, tapi jumlah per kelompoknya dibagi rata, jadi keempat kelompok selalu ada.
-
-Semua berkas adalah file PDF satu halaman A4 yang bisa dibuka dan [diunduh](#get-apiv1berkasid_berkas) seperti berkas asli. Isinya contoh, dengan data mahasiswa itu sendiri, dan di bagian bawahnya tertulis "Dokumen contoh untuk uji coba GoMagang. Bukan dokumen asli.":
-
-| Berkas | Isi |
-|---|---|
-| CV | Data diri, pendidikan, 3 keahlian, dan 2 pengalaman organisasi acak |
-| Surat Pernyataan DPA | Pernyataan dari dosen pembimbing akademik fiktif, dengan NIP acak, bahwa mahasiswa diizinkan mengikuti Magang Berdampak |
-| Berkas tambahan | Salah satu dari portfolio proyek, sertifikat kompetensi, transkrip nilai, surat rekomendasi, atau sertifikat organisasi, tanpa judul yang sama dalam satu pendaftaran |
-
-Nama file dibuat dengan format yang sama seperti unggahan asli, yaitu `{id_pengguna}_{surat-dpa|cv|berkas-tambahan}_{acak}.pdf`, dan `ukuran_berkas` sesuai ukuran file-nya, sekitar 1-2 KB.
-
-**Posisi:** pendaftaran dibagi rata ke semua posisi yang bisa didaftar di periode yang sedang berlangsung, yaitu yang tidak disembunyikan dan perusahaannya juga tidak disembunyikan, menurut jam WIB, dengan urutan acak. Setiap posisi mendapat jumlah yang sama atau selisih satu, misalnya 50 pendaftaran untuk 6 posisi menjadi 8 atau 9 per posisi. Posisi di periode yang sudah selesai atau belum dimulai tidak mendapat pendaftaran.
-
-**Kuota:** hanya informasi, jadi jumlah pendaftar di satu posisi boleh melebihi kuotanya. Aturan lain di [`POST /api/v1/pendaftaran`](#post-apiv1pendaftaran) juga tidak diperiksa, karena datanya dibuat langsung.
-
-Semua baris disimpan dalam satu transaksi, dan file ditulis sebelum transaksi disimpan. Kalau ada file yang gagal ditulis, file yang sudah tertulis dihapus lagi dan semua baris dibatalkan, jadi yang tersimpan selalu 50 mahasiswa lengkap dengan berkasnya, atau tidak sama sekali. Setiap pemanggilan menambah 50 lagi, tanpa menyentuh data yang sudah ada. [`DELETE /api/v1/mahasiswa`](#delete-apiv1mahasiswa-sementara) menghapus baris dan file-nya.
-
-**Respons `201`:**
-```json
-{
-  "jumlah_mahasiswa": 50,
-  "jumlah_pendaftaran": 50,
-  "jumlah_berkas": 175
-}
-```
-
-`jumlah_berkas` adalah jumlah file yang dibuat, dari semua pendaftaran. Nilainya antara 100 dan 250, tergantung berkas tambahan yang terpilih.
-
-| Status | Arti |
-|---|---|
-| `403` | Header `X-Admin-Secret` tidak ada atau salah |
-| `404` | `ADMIN_SECRET` tidak di-set di server |
-| `409` | Tidak ada posisi di periode yang sedang berlangsung |
-| `500` | Terjadi kesalahan di server, misalnya folder upload tidak bisa ditulisi, dan tidak ada data maupun file yang tersimpan |
-
-**Cara menghapus nanti:** kedua route sementara ini ada di satu folder. Hapus folder `src/features/data_uji_coba`, barisnya di `src/features/mod.rs`, dan ekspor `require_admin_secret` di `src/features/panitia_magang/mod.rs`.
-
 ## Endpoint posisi magang
 
 ### `GET /api/v1/posisi`
@@ -539,7 +414,6 @@ curl -X DELETE http://localhost:3000/api/v1/posisi/1 \
 | [`GET /api/v1/posisi`](#get-apiv1posisi) | Tidak tampil, kecuali Panitia Magang memakai `termasuk_dihapus=true` |
 | Pendaftaran baru | Ditolak `422` `Posisi tidak ditemukan.` oleh [`POST /api/v1/pendaftaran`](#post-apiv1pendaftaran) |
 | Pendaftaran yang sudah masuk | Tetap ada, tetap tampil dengan nama posisinya, dan tetap bisa diproses Panitia Magang |
-| [`POST /api/v1/mahasiswa/seed`](#post-apiv1mahasiswaseed-sementara) | Tidak memakai posisi ini |
 | Ubah posisi | Ditolak `404` |
 
 **Respons `200`:** posisi yang disembunyikan, dengan `deleted_at` terisi, dengan bentuk yang sama seperti satu item di [`GET /api/v1/posisi`](#get-apiv1posisi).
@@ -1046,6 +920,7 @@ curl "http://localhost:3000/api/v1/pendaftaran?p=2&r=50&status=1&perusahaan=3" \
         "id_perusahaan": 1,
         "nama_perusahaan": "PT Nusantara Digital"
       },
+      "batas_konfirmasi": null,
       "ada_jadwal_seleksi": false,
       "ada_plotting_dpm": false,
       "mahasiswa": {
@@ -1074,6 +949,7 @@ Field setiap baris di `data`:
 
 | Field | Arti |
 |---|---|
+| `batas_konfirmasi` | Hanya terisi saat status `Diterima`: batas waktu mahasiswa mengonfirmasi penerimaan, yaitu 12 jam setelah status menjadi `Diterima`, dalam format `YYYY-MM-DDTHH:MM:SS+07:00`. Lewat dari itu, pendaftaran dibatalkan otomatis (lihat [Pembatalan otomatis](#pembatalan-otomatis-konfirmasi-penerimaan)). `null` pada status lain. Field ini juga ada di detail |
 | `ada_jadwal_seleksi` | `true` kalau jadwal seleksi substansi sudah diisi, lewat [`PUT /api/v1/pendaftaran/jadwal-seleksi-substansi`](#put-apiv1pendaftaranjadwal-seleksi-substansi) |
 | `ada_plotting_dpm` | `true` kalau plotting DPM sudah diisi, lewat [`PUT /api/v1/pendaftaran/plot-dpm`](#put-apiv1pendaftaranplot-dpm) |
 
@@ -1105,6 +981,7 @@ Mengambil detail satu pendaftaran, dengan aturan akses yang sama: mahasiswa hany
     "id_perusahaan": 1,
     "nama_perusahaan": "PT Nusantara Digital"
   },
+  "batas_konfirmasi": "2026-11-05T05:00:00+07:00",
   "mahasiswa": {
     "id_pengguna": 12,
     "nim": "215150200111001",
@@ -1275,6 +1152,8 @@ Perubahan lain ditolak `409`, termasuk ke status yang sama. `Diterima` ke `Aktif
 **Yang dilakukan:** dalam satu transaksi, mengubah status dan `updated_at`, lalu menambah baris `log_status` yang mencatat status lama, status baru, dan Panitia Magang yang mengubah. Status tetap bisa diubah setelah periodenya selesai.
 
 **Email pemberitahuan:** setelah status berhasil diubah, mahasiswa pemilik pendaftaran dikirimi email ke alamat akun Google-nya. Subjeknya `Status pendaftaran magang: <status baru>`. Isinya HTML bergaya UI frontend: logo GoMagang di atas, ikon centang hijau (Lolos Seleksi Administrasi, Diterima, Aktif, Selesai) atau silang merah (Tidak Lolos, Batal/Mengundurkan Diri), kartu posisi dan perusahaan dengan badge status baru serta status sebelumnya, langkah berikutnya sesuai status, dan tombol ke `FRONTEND_URL/dasbor/{id_pendaftaran}`. Logo dan ikon ikut di dalam email sebagai gambar inline PNG, dan versi teks biasa disertakan untuk klien yang tidak menampilkan HTML. Templatnya di `templates/email/perubahan_status.html`, dan gambarnya di `assets/email/`. Email dikirim di latar belakang, sehingga respons tidak menunggu pengiriman, dan kegagalan kirim hanya dicatat di log server, tanpa membatalkan perubahan status. Perubahan yang ditolak (`404`, `409`, dst.) tidak mengirim email. Konfirmasi penerimaan oleh mahasiswa sendiri juga tidak mengirim email.
+
+Khusus perubahan ke `Diterima`, subjeknya `Status pendaftaran magang: Diterima (konfirmasi dalam 1 x 12 jam)`, tombolnya menjadi "Konfirmasi penerimaan", dan ada kotak peringatan merah bahwa konfirmasi wajib dilakukan paling lambat pada `batas_konfirmasi` (ditulis seperti "Rabu, 11 November 2026 pukul 20.15 WIB"), dan jika lewat, pendaftaran otomatis dinyatakan `Batal/Mengundurkan Diri`.
 
 **Konfigurasi email:** semua lewat env. Tanpa `SMTP_HOST`, tidak ada email yang dikirim dan endpoint tetap berjalan seperti biasa.
 
@@ -1526,6 +1405,7 @@ curl -X PATCH "http://localhost:3000/api/v1/pendaftaran/accept?id=1" \
 **Aturan:**
 - Status pendaftaran yang dikonfirmasi harus `Diterima`.
 - Mahasiswa tidak boleh sudah punya pendaftaran `Aktif`.
+- Konfirmasi harus dilakukan sebelum `batas_konfirmasi`, yaitu dalam 12 jam setelah status menjadi `Diterima`. Lewat dari itu ditolak `409`, dan pendaftarannya dibatalkan otomatis.
 - Konfirmasi tetap bisa dilakukan setelah periodenya selesai.
 
 **Yang dilakukan:** dalam satu transaksi,
@@ -1542,7 +1422,15 @@ curl -X PATCH "http://localhost:3000/api/v1/pendaftaran/accept?id=1" \
 | `401` | Access token tidak valid |
 | `403` | Pendaftaran milik mahasiswa lain, atau user tidak punya baris di tabel `mahasiswa`, misalnya Panitia Magang |
 | `404` | Pendaftaran tidak ditemukan |
-| `409` | Status pendaftaran bukan `Diterima`, atau sudah punya pendaftaran `Aktif` |
+| `409` | Status pendaftaran bukan `Diterima`, sudah punya pendaftaran `Aktif`, atau batas waktu 12 jam sudah lewat (`Batas waktu konfirmasi 1 x 12 jam sudah lewat, sehingga pendaftaran ini dibatalkan.`) |
+
+### Pembatalan otomatis konfirmasi penerimaan
+
+Bukan endpoint, tapi proses di server yang berjalan setiap menit sejak server start. Setiap pendaftaran berstatus `Diterima` yang `batas_konfirmasi`-nya sudah lewat diubah menjadi `Batal/Mengundurkan Diri`. Perubahannya mengisi `updated_at` dan menambah baris `log_status` dengan status lama `Diterima` dan `id_pengubah` kosong.
+
+- Waktu mulainya diambil dari baris `log_status` saat status menjadi `Diterima`. Kalau baris itu tidak ada, misalnya data lama, `updated_at` yang dipakai.
+- Karena prosesnya berjalan per menit, pembatalan bisa terjadi hingga sekitar satu menit setelah batas waktu. Dalam selang itu, konfirmasi lewat [`PATCH /api/v1/pendaftaran/accept`](#patch-apiv1pendaftaranaccept) sudah ditolak.
+- Mahasiswa yang pendaftarannya dibatalkan dikirimi email (lihat email pemberitahuan di [`PATCH /api/v1/pendaftaran`](#patch-apiv1pendaftaran)) dengan keterangan bahwa pendaftaran dibatalkan otomatis karena penerimaan tidak dikonfirmasi dalam 1 x 12 jam.
 
 ### `GET /api/v1/berkas/{id_berkas}`
 
@@ -1574,7 +1462,7 @@ Membuka satu berkas pendaftaran tanpa login, lewat link di file hasil [`POST /ap
 - `tag` adalah HMAC-SHA256 base64url atas `{id_berkas}.{kedaluwarsa}`. Kuncinya diturunkan dari `JWT_SECRET` khusus untuk link berkas, jadi tidak bisa dipakai sebagai token sesi atau sebaliknya.
 - Mengubah bagian mana pun, misalnya `id_berkas` untuk membuka berkas lain atau `kedaluwarsa` untuk memperpanjang, membuat tag-nya tidak cocok.
 - Link tidak bisa dicabut satu per satu sebelum kedaluwarsa. Mengganti `JWT_SECRET` membatalkan semua link sekaligus, dan semua sesi login.
-- Link berhenti berfungsi kalau berkasnya dihapus, misalnya lewat [`DELETE /api/v1/mahasiswa`](#delete-apiv1mahasiswa-sementara).
+- Link berhenti berfungsi kalau berkasnya dihapus.
 
 **Respons `200`:** isi file dengan header berikut.
 
@@ -1752,7 +1640,7 @@ curl -X POST http://localhost:3000/api/v1/panitia-magang \
 | `409` | Email sudah terdaftar, tanpa membedakan huruf besar dan kecil |
 | `422` | Isi body ditolak |
 
-**Cara menghapus nanti:** hapus dulu folder `src/features/data_uji_coba` yang memakai middleware yang sama, lalu hapus folder `src/features/panitia_magang`, barisnya di `src/features/mod.rs`, dan `admin_secret` di `Config` serta `AppState`.
+**Cara menghapus nanti:** hapus folder `src/features/panitia_magang`, barisnya di `src/features/mod.rs`, dan `admin_secret` di `Config` serta `AppState`.
 
 ## Endpoint templat SP DPA
 
@@ -1806,8 +1694,13 @@ Mengganti tautan templat yang berlaku. Hanya untuk Panitia Magang, dilindungi mi
 
 ## Riwayat perubahan
 
+### 12 November 2026
+
+- `DELETE /api/v1/mahasiswa` dan `POST /api/v1/mahasiswa/seed` (endpoint sementara untuk uji coba) dihapus, beserta folder `src/features/data_uji_coba`. `ADMIN_SECRET` kini hanya dipakai `POST /api/v1/panitia-magang`.
+
 ### 11 November 2026
 
+- Konfirmasi penerimaan kini dibatasi 1 x 12 jam sejak status menjadi `Diterima`. `GET /api/v1/pendaftaran` dan `GET /api/v1/pendaftaran/{id}` mengirim field baru `batas_konfirmasi`. `PATCH /api/v1/pendaftaran/accept` menolak konfirmasi yang terlambat dengan `409`, dan server membatalkan otomatis pendaftaran yang tidak dikonfirmasi menjadi `Batal/Mengundurkan Diri`, disertai email pemberitahuan. Email untuk status `Diterima` kini berisi peringatan tegas tentang batas waktu tersebut.
 - Email pemberitahuan perubahan status kini berupa HTML dengan logo, ikon status, dan tombol ke detail pendaftaran, dengan versi teks biasa sebagai cadangan.
 - `PATCH /api/v1/pendaftaran` kini mengirim email pemberitahuan ke mahasiswa setiap kali Panitia Magang berhasil mengubah status pendaftarannya. Env baru: `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`. Tanpa `SMTP_HOST`, email tidak dikirim.
 - `POST /api/v1/pendaftaran`: batas pendaftaran kini 2 kali per periode, dihitung dari semua pendaftaran di periode posisi yang dituju apa pun statusnya. Sebelumnya batasnya 2 pendaftaran yang masih berjalan, sehingga pendaftaran yang batal, tidak lolos, atau selesai membuka jatah baru. Pesan `409`-nya kini `Kamu sudah mendaftar 2 kali di periode ini.`

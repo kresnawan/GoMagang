@@ -24,6 +24,15 @@ pub struct PanitiaMagang {
 }
 
 impl RegisterPanitiaMagang {
+    /// Memvalidasi dan merapikan data pendaftaran Panitia Magang.
+    ///
+    /// - `email`: dirapikan (spasi dibuang, huruf kecil semua), harus alamat `@gmail.com` yang
+    ///   valid,
+    ///   dan maksimal 255 karakter. Alasannya, Panitia Magang login dengan akun Gmail.
+    /// - `nama` (opsional): 1-255 karakter setelah spasi di awal dan akhir dibuang.
+    /// - `no_hp` (opsional): 9-15 digit angka, boleh diawali `+`.
+    ///
+    /// Pelanggaran dijawab [`AppError::Validation`] dengan pesan untuk pengguna.
     pub fn validate(mut self) -> Result<Self, AppError> {
         self.email = self.email.trim().to_ascii_lowercase();
         let local = self.email.strip_suffix(GMAIL_SUFFIX).unwrap_or_default();

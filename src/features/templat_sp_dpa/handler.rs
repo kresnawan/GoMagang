@@ -10,7 +10,10 @@ use crate::{
     state::AppState,
 };
 
-/// The template in use, or `null` while Panitia Magang has not set one. For mahasiswa and Panitia Magang.
+/// `GET /api/v1/templat-sp-dpa`: tautan templat surat pernyataan DPA yang sedang berlaku.
+///
+/// Bisa diakses mahasiswa dan Panitia Magang; pengguna tanpa peran dijawab `403`. Mengembalikan
+/// `null` bila Panitia Magang belum pernah mengatur tautan.
 pub async fn find(
     State(state): State<AppState>,
     user: User,
@@ -22,7 +25,10 @@ pub async fn find(
     Ok(Json(repository::find(&state.db).await?))
 }
 
-/// Replaces the template in use. The old link stays in the table as history.
+/// `PUT /api/v1/templat-sp-dpa`: mengganti tautan templat yang berlaku (hanya Panitia Magang).
+///
+/// Tautan divalidasi lebih dulu (lihat [`SimpanTemplat::validate`]), lalu disimpan sebagai baris
+/// baru. Tautan lama tetap ada di tabel sebagai riwayat. Mengembalikan templat yang baru berlaku.
 pub async fn simpan(
     State(state): State<AppState>,
     Json(data): Json<SimpanTemplat>,

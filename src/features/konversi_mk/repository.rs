@@ -2,10 +2,10 @@ use sqlx::{PgConnection, PgPool};
 
 use super::model::{HapusResult, MataKuliah, Penyetaraan, TambahResult};
 
-/// The mata kuliah by their konversi name, leaving out the hidden ones unless asked for. Hidden
-/// ones come last.
+/// Daftar mata kuliah, diurutkan berdasarkan nama MK konversi lalu MK asal.
 ///
-/// deleted_at has no time zone and is written in WIB, so it is sent out with the +07:00 offset.
+/// Mata kuliah yang disembunyikan tidak disertakan kecuali `termasuk_dihapus` bernilai `true`, dan
+/// dalam hal itu ditaruh di akhir daftar. `deleted_at` dikirim dalam WIB dengan offset `+07:00`.
 pub async fn list_mk(db: &PgPool, termasuk_dihapus: bool) -> Result<Vec<MataKuliah>, sqlx::Error> {
     sqlx::query_as(
         "SELECT id_mk_konversi, mk_asal, mk_konversi, sks,
@@ -19,8 +19,12 @@ pub async fn list_mk(db: &PgPool, termasuk_dihapus: bool) -> Result<Vec<MataKuli
     .await
 }
 
-/// Saves a mata kuliah. Returns `None` if a mata kuliah that is not hidden already has the same
-/// MK asal and MK konversi, in any letter case.
+/// Menyimpan mata kuliah baru.
+///
+/// Mengembalikan `None` bila mata kuliah yang tidak disembunyikan sudah memiliki pasangan MK asal
+/// dan
+/// MK konversi yang sama, tanpa membedakan huruf besar-kecil. Tabel dikunci selama transaksi; tanpa
+/// kunci ini, dua request dengan pasangan yang sama bisa sama-sama tersimpan.
 pub async fn create_mk(
     db: &PgPool,
     mk_asal: &str,
@@ -56,7 +60,10 @@ pub async fn create_mk(
     Ok(mata_kuliah)
 }
 
-/// Hides a mata kuliah. Returns `None` if there is no such mata kuliah, or it is hidden already.
+/// Menyembunyikan mata kuliah dengan mengisi `deleted_at` dengan waktu sekarang dalam WIB.
+///
+/// Mengembalikan mata kuliah setelah disembunyikan, atau `None` bila tidak ada atau sudah
+/// disembunyikan.
 pub async fn soft_delete_mk(
     db: &PgPool,
     id_mk_konversi: i32,
@@ -73,7 +80,7 @@ pub async fn soft_delete_mk(
     .await
 }
 
-/// The id_pengguna of the mahasiswa who owns the pendaftaran, if it exists.
+/// `id_pengguna` mahasiswa pemilik pendaftaran, atau `None` bila pendaftarannya tidak ada.
 pub async fn find_pemilik(db: &PgPool, id_pendaftaran: i32) -> Result<Option<i32>, sqlx::Error> {
     sqlx::query_scalar("SELECT id_pengguna FROM pendaftaran WHERE id_pendaftaran = $1")
         .bind(id_pendaftaran)
@@ -94,8 +101,10 @@ macro_rules! select_penyetaraan {
     };
 }
 
-/// The mata kuliah chosen for a pendaftaran, in the order they were chosen. Hidden mata kuliah
-/// stay in the list.
+/// Mata kuliah yang dipilih untuk sebuah pendaftaran, sesuai urutan waktu dipilih.
+///
+/// Mata kuliah yang sudah disembunyikan setelah dipilih tetap ada di daftar, dengan `deleted_at`
+/// terisi.
 pub async fn list_penyetaraan(
     db: &PgPool,
     id_pendaftaran: i32,
@@ -110,11 +119,15 @@ pub async fn list_penyetaraan(
     .await
 }
 
-/// Who owns the pendaftaran and whether it is Aktif, holding back changes to it, such as Panitia Magang
-/// changing its status, until the transaction ends.
+/// Mengunci baris pendaftaran, lalu mengembalikan pemiliknya dan apakah statusnya `Aktif`.
 ///
-/// Two statements on purpose, as in the pendaftaran feature: FOR UPDATE on a join with
-/// status_pendaftaran would lose a row whose status changed while waiting for the lock.
+/// Kunci `FOR UPDATE` menahan perubahan lain pada pendaftaran ini (misalnya Panitia Magang mengubah
+/// statusnya) sampai transaksi selesai, sehingga status yang dicek tetap berlaku selama penyetaraan
+/// diubah. Penguncian dan pembacaan status sengaja dipisah menjadi dua statement, seperti di fitur
+/// pendaftaran. `FOR UPDATE` pada join dengan `status_pendaftaran` bisa kehilangan baris yang
+/// statusnya berubah saat menunggu kunci.
+///
+/// Mengembalikan `None` bila pendaftaran tidak ada.
 async fn lock_pendaftaran(
     conn: &mut PgConnection,
     id_pendaftaran: i32,
@@ -142,7 +155,16 @@ async fn lock_pendaftaran(
     Ok(Some((id_pengguna, aktif)))
 }
 
-/// Chooses a mata kuliah for a pendaftaran that belongs to this mahasiswa and is Aktif.
+/// Memilihkan mata kuliah untuk pendaftaran milik mahasiswa ini yang berstatus `Aktif`.
+///
+/// Dalam satu transaksi:
+/// 1. Pendaftaran dikunci dan diperiksa: ada, milik `id_pengguna`, dan `Aktif`.
+/// 2. Mata kuliah diperiksa masih ada dan tidak disembunyikan, dengan kunci `FOR SHARE` agar tidak
+///    bisa disembunyikan sebelum transaksi selesai.
+/// 3. Penyetaraan disimpan. Pilihan ganda ditolak oleh constraint unik
+///    `(id_pendaftaran, id_mk_konversi)`.
+///
+/// Mengembalikan hasil berupa [`TambahResult`].
 pub async fn tambah_penyetaraan(
     db: &PgPool,
     id_pendaftaran: i32,
@@ -198,7 +220,11 @@ pub async fn tambah_penyetaraan(
     Ok(TambahResult::Ditambahkan(penyetaraan))
 }
 
-/// Drops a chosen mata kuliah from a pendaftaran that belongs to this mahasiswa and is Aktif.
+/// Menghapus pilihan mata kuliah dari pendaftaran milik mahasiswa ini yang berstatus `Aktif`.
+///
+/// Pendaftaran pemilik penyetaraan dikunci dulu, sehingga statusnya tidak bisa berubah di tengah
+/// proses. Mengembalikan hasil berupa [`HapusResult`]: terhapus, tidak ditemukan, bukan pemilik,
+/// atau pendaftaran tidak `Aktif`.
 pub async fn hapus_penyetaraan(
     db: &PgPool,
     id_penyetaraan: i32,

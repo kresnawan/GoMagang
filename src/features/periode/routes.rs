@@ -7,6 +7,11 @@ use axum::{
 use super::handler;
 use crate::{features::auth::require_panitia_magang, state::AppState};
 
+/// Router endpoint periode pendaftaran.
+///
+/// `GET /periode` bisa diakses semua pengguna yang login (aturan per peran ada di handler).
+/// `POST /periode`, `PATCH /periode/{id}/start`, dan `PATCH /periode/{id}/stop` hanya untuk Panitia
+/// Magang lewat middleware `require_panitia_magang`.
 pub fn routes(state: &AppState) -> Router<AppState> {
     let create = post(handler::create)
         .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));

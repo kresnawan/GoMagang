@@ -7,10 +7,14 @@ use axum::{
 use super::repository;
 use crate::{error::AppError, features::auth::User, state::AppState};
 
-/// Lets only pengguna with a mahasiswa row through, and hands that row to the handler.
+/// Middleware yang hanya meloloskan pengguna yang punya baris di tabel `mahasiswa`.
 ///
-/// The `User` extractor answers 401 for a missing or invalid access token, which is what tells
-/// the frontend to refresh. A valid token without a mahasiswa row is answered with 403.
+/// Extractor [`User`] menjawab `401` bila access token tidak ada atau tidak valid; jawaban ini yang
+/// memberi tahu frontend untuk me-refresh sesi. Token yang valid tetapi bukan milik mahasiswa
+/// (misalnya Panitia Magang) dijawab `403`.
+///
+/// Data diri mahasiswa yang ditemukan disisipkan ke extension request, sehingga handler bisa
+/// mengambilnya dengan `Extension<Mahasiswa>` tanpa query ulang.
 pub async fn require_mahasiswa(
     State(state): State<AppState>,
     user: User,

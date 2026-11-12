@@ -10,10 +10,12 @@ use super::{
 };
 use crate::{error::AppError, state::AppState};
 
-/// Lets only pengguna with a panitia_magang row through.
+/// Middleware yang hanya meloloskan pengguna yang terdaftar sebagai Panitia Magang.
 ///
-/// The `User` extractor answers 401 for a missing or invalid access token, and any other valid
-/// token is answered with 403.
+/// Extractor [`User`] lebih dulu memeriksa cookie `access_token`; bila tidak ada atau tidak valid,
+/// request dijawab `401` sebelum middleware ini berjalan. Setelah itu peran pengguna dicek di
+/// database lewat [`find_peran`]. Hanya pengguna yang punya baris di tabel `panitia_magang` yang
+/// diteruskan ke handler; selain itu, termasuk mahasiswa, dijawab `403`.
 pub async fn require_panitia_magang(
     State(state): State<AppState>,
     user: User,
