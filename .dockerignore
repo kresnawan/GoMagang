@@ -1,0 +1,11 @@
+# Hanya yang dibutuhkan build yang dikirim ke Docker. Secret dan data tidak boleh masuk image.
+.env
+.env.*
+uploads/
+target/
+.git/
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
+DOCUMENTATION.md

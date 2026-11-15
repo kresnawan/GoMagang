@@ -1,0 +1,18 @@
+services:
+  backend:
+    build: .
+    image: gomagang:latest
+    restart: unless-stopped
+    # Semua konfigurasi dan secret dibaca dari file env di host, bukan ditanam di image.
+    env_file: .env.production
+    environment:
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      # Lokasi pasti berkas unggahan di VPS. Folder ini harus bisa ditulis UID 10001.
+      - /srv/gomagang/uploads:/data/uploads
+    ports:
+      # Hanya terbuka untuk VPS itu sendiri; akses publik lewat reverse proxy (Nginx/Caddy) + HTTPS.
+      - "127.0.0.1:3000:3000"
+    extra_hosts:
+      # Supaya container bisa menghubungi PostgreSQL yang terpasang langsung di VPS.
+      - "host.docker.internal:host-gateway"
