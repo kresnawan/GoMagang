@@ -3,6 +3,9 @@ services:
     build: .
     image: gomagang:latest
     restart: unless-stopped
+    # Menjalankan init kecil (tini) sebagai PID 1 yang meneruskan sinyal ke server dan membereskan
+    # proses zombie. Server sendiri menangani SIGTERM dan menyelesaikan request yang sedang berjalan.
+    init: true
     # Semua konfigurasi dan secret dibaca dari file env di host, bukan ditanam di image.
     env_file: .env.production
     environment:

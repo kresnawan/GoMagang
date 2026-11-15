@@ -1,9 +1,9 @@
-//! Metrics and encoding for the standard PDF fonts Times-Roman and Times-Bold, which every PDF
-//! reader has built in, so no font file needs to be embedded.
+//! Metrik dan encoding untuk font standar PDF Times-Roman dan Times-Bold, yang sudah tertanam di
+//! setiap pembaca PDF, sehingga tidak perlu menyertakan berkas font.
 //!
-//! The widths come from Adobe's AFM files for the core 14 fonts, which may be used and
-//! distributed for any purpose. They are listed per WinAnsiEncoding code from 32 to 255, in
-//! thousandths of the font size. 0 marks a code with no glyph.
+//! Lebar karakter diambil dari berkas AFM Adobe untuk 14 font inti, yang boleh dipakai dan
+//! disebarluaskan untuk keperluan apa pun. Lebarnya dicantumkan per kode WinAnsiEncoding dari 32
+//! sampai 255, dalam seperseribu ukuran font. Nilai 0 menandai kode tanpa glyph.
 
 #[derive(Clone, Copy)]
 pub enum Huruf {

@@ -1,8 +1,8 @@
-//! Lays out the surat as a one-page A4 PDF, after the faculty's template. Positions are measured
-//! from the top of the page in points; text positions are baselines.
+//! Menyusun surat sebagai PDF A4 satu halaman, mengikuti templat fakultas. Posisi diukur dari atas
+//! halaman dalam satuan point; posisi teks adalah baseline-nya.
 //!
-//! Nothing here depends on the clock or on randomness, so the same content always gives the
-//! same bytes.
+//! Tidak ada bagian yang bergantung pada jam atau angka acak, sehingga isi yang sama selalu
+//! menghasilkan byte yang sama.
 
 use pdf_writer::{
     Content, Filter, Finish, Name, Pdf, Rect, Ref, Str, TextStr,
@@ -28,12 +28,12 @@ const HITAM: [f32; 3] = [0.0, 0.0, 0.0];
 const ABU: [f32; 3] = [0.45, 0.45, 0.45];
 const BIRU: [f32; 3] = [0.07, 0.33, 0.8];
 
-/// Header block of the faculty, next to the logo.
+/// Posisi kop surat fakultas, di samping logo.
 const KOP_X: f32 = 225.0;
 const ALAMAT_FAKULTAS: &str =
     "Jl. Veteran, Malang 65145, Jawa Timur, Indonesia, Telp. (0341) 577-911";
 
-/// Size of the QR code in the signature space.
+/// Ukuran QR code di ruang tanda tangan.
 const UKURAN_QR: f32 = 74.0;
 
 struct Kanvas {
@@ -450,7 +450,7 @@ mod tests {
         );
     }
 
-    /// Writes a sample to look at while adjusting the layout:
+    /// Menulis contoh surat untuk dilihat saat menyesuaikan tata letak:
     /// `SURAT_PREVIEW=/tmp/surat.pdf cargo test surat_preview -- --ignored`
     #[test]
     #[ignore]

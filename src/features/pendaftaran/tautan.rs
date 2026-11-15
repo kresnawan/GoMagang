@@ -1,15 +1,16 @@
-//! Public links to berkas pendaftaran, for the people outside the app (partner companies and
-//! kaprodi) who open the exported Excel without logging in.
+//! Tautan publik ke berkas pendaftaran, untuk pihak di luar aplikasi (perusahaan mitra dan kaprodi)
+//! yang membuka berkas Excel hasil ekspor tanpa login.
 //!
-//! A link carries `{id_berkas}.{expiry}.{tag}`, where the tag is an HMAC-SHA256 over the first two
-//! parts. It opens that one file until it expires, and changing any part of it breaks the tag.
+//! Tautan berisi `{id_berkas}.{kedaluwarsa}.{tag}`, dengan tag berupa HMAC-SHA256 atas dua bagian
+//! pertama. Tautan membuka satu berkas itu saja sampai kedaluwarsa, dan mengubah bagian mana pun
+//! membuat tag-nya tidak cocok.
 
 use std::time::Duration;
 
 use aws_lc_rs::hmac;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 
-/// Long enough for a round of selection by the partner companies.
+/// Cukup lama untuk satu putaran seleksi oleh perusahaan mitra.
 pub const MASA_BERLAKU: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
 const KONTEKS_KUNCI: &[u8] = b"gomagang/tautan-berkas/v1";

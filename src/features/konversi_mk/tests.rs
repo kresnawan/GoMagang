@@ -71,7 +71,7 @@ async fn panitia_magang_cookie(db: &PgPool, state: &AppState) -> String {
     cookie_for(state, &user)
 }
 
-/// A pendaftaran of this mahasiswa with the given status, on a fresh position.
+/// Pendaftaran milik mahasiswa ini dengan status tertentu, pada posisi baru.
 async fn pendaftaran(db: &PgPool, user: &User, status: &str) -> i64 {
     let id: i32 = sqlx::query_scalar(
         "WITH perusahaan AS (

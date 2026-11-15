@@ -5,14 +5,15 @@ use crate::error::AppError;
 
 const MAX_NAMA_LEN: usize = 255;
 
-/// A company as other features show it, without its hidden state.
+/// Perusahaan seperti yang ditampilkan fitur lain, tanpa status disembunyikan.
 #[derive(Debug, Serialize, FromRow)]
 pub struct Perusahaan {
     pub id_perusahaan: i32,
     pub nama_perusahaan: String,
 }
 
-/// A company as the perusahaan endpoints show it. `deleted_at` is set once it has been hidden.
+/// Perusahaan seperti yang ditampilkan endpoint perusahaan. `deleted_at` terisi setelah perusahaan
+/// disembunyikan.
 #[derive(Debug, Serialize, FromRow)]
 pub struct PerusahaanMitra {
     pub id_perusahaan: i32,
@@ -26,7 +27,7 @@ pub struct ListQuery {
     pub termasuk_dihapus: Option<bool>,
 }
 
-/// The body of both creating a company and renaming one.
+/// Body untuk membuat perusahaan maupun mengganti namanya.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NamaPerusahaan {
@@ -50,7 +51,7 @@ impl NamaPerusahaan {
     }
 }
 
-/// What became of a request to rename a company.
+/// Hasil permintaan mengganti nama perusahaan.
 #[derive(Debug)]
 pub enum RenameResult {
     Renamed(PerusahaanMitra),

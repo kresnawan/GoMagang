@@ -45,10 +45,10 @@ impl Mahasiswa {
     }
 }
 
-/// The columns a mahasiswa can change. A field that is left out keeps its current value.
+/// Kolom yang boleh diubah mahasiswa. Field yang tidak dikirim tetap bernilai seperti sebelumnya.
 ///
-/// Sending `null` is rejected, and so are other fields such as `email`, so that a mistake in the
-/// body fails loudly instead of being ignored.
+/// Mengirim `null` ditolak, begitu pula field lain seperti `email`, agar kesalahan di body langsung
+/// ketahuan alih-alih diabaikan diam-diam.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MahasiswaPatch {

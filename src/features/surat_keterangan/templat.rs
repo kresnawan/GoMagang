@@ -1,23 +1,23 @@
-//! Parts of the surat that have no data source yet. Everything marked MOCK is a stand-in and
-//! should be replaced once the real data exists (see DOCUMENTATION.md).
+//! Bagian surat yang belum punya sumber data. Semua yang ditandai MOCK adalah pengganti sementara
+//! dan harus diganti begitu data aslinya tersedia (lihat DOCUMENTATION.md).
 
 use time::{Date, Duration};
 
 pub const KOTA: &str = "Malang";
 pub const JABATAN_PEJABAT: &str = "Wakil Dekan Bidang Akademik";
 
-/// MOCK: the official and their NIP are not stored anywhere yet.
+/// MOCK: nama pejabat dan NIP-nya belum disimpan di mana pun.
 pub const NAMA_PEJABAT: &str = "[Nama Pejabat]";
 pub const NIP_PEJABAT: &str = "[NIP]";
 
-/// MOCK: the kind of programme is not stored yet.
+/// MOCK: jenis program magang belum disimpan.
 pub const PROGRAM: &str = "Magang Mandiri";
 
-/// MOCK: perusahaan_mitra only has a name.
+/// MOCK: `perusahaan_mitra` baru menyimpan nama.
 pub const ALAMAT_PERUSAHAAN: &str = "Jl. Contoh Alamat Instansi No. 1, Kota Malang";
 
-/// MOCK: only the registration period is stored, not when the internship itself runs. Until it
-/// is, the internship is taken to start on the day the surat is issued and to last this long.
+/// MOCK: yang tersimpan baru periode pendaftaran, bukan waktu pelaksanaan magang. Sampai data itu
+/// ada, magang dianggap mulai pada tanggal surat terbit dan berlangsung selama ini.
 const LAMA_MAGANG: Duration = Duration::days(120);
 
 /// MOCK: menghitung tanggal mulai dan selesai magang yang dicetak di surat.

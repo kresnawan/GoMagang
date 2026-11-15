@@ -1,5 +1,5 @@
-//! Sending email. Mail goes out in the background, so a slow or unreachable SMTP server never
-//! holds up or fails the request that caused it.
+//! Pengiriman email. Email dikirim di latar belakang, sehingga server SMTP yang lambat atau tidak
+//! terjangkau tidak pernah menahan atau menggagalkan request yang memicunya.
 
 #[cfg(test)]
 use std::sync::{Arc, Mutex};
@@ -10,13 +10,14 @@ use lettre::{
     transport::smtp::authentication::Credentials,
 };
 
+use tracing::Instrument;
+
 use crate::config::{SmtpConfig, SmtpTls};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Email {
     pub kepada: String,
     pub subjek: String,
-    /// Plain text, for clients that do not show HTML.
     pub isi: String,
     pub html: Option<Html>,
 }
@@ -24,8 +25,6 @@ pub struct Email {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Html {
     pub isi: String,
-    /// Images the HTML shows through `cid:<cid>`. They travel inside the email, as clients block
-    /// remote images and most do not show SVG.
     pub gambar: Vec<GambarInline>,
 }
 
@@ -35,16 +34,13 @@ pub struct GambarInline {
     pub png: &'static [u8],
 }
 
-// Made once and shared through an Arc, so the size of the SMTP variant costs nothing.
 #[allow(clippy::large_enum_variant)]
 pub enum PengirimEmail {
     Smtp {
         transport: AsyncSmtpTransport<Tokio1Executor>,
         dari: Mailbox,
     },
-    /// SMTP is not configured: mail is dropped.
     Nonaktif,
-    /// Keeps the mail so tests can read it.
     #[cfg(test)]
     Uji(Arc<Mutex<Vec<Email>>>),
 }
@@ -112,16 +108,20 @@ impl PengirimEmail {
                 let message = match build_message(dari, &email) {
                     Ok(message) => message,
                     Err(err) => {
-                        eprintln!("failed to build email to {}: {err}", email.kepada);
+                        tracing::error!(error = %err, kepada = %email.kepada, "failed to build email");
                         return;
                     }
                 };
                 let transport = transport.clone();
-                tokio::spawn(async move {
-                    if let Err(err) = transport.send(message).await {
-                        eprintln!("failed to send email to {}: {err}", email.kepada);
+                // Keeps the request span, so a failed send is logged with its request ID.
+                tokio::spawn(
+                    async move {
+                        if let Err(err) = transport.send(message).await {
+                            tracing::error!(error = %err, kepada = %email.kepada, "failed to send email");
+                        }
                     }
-                });
+                    .instrument(tracing::Span::current()),
+                );
             }
             Self::Nonaktif => {}
             #[cfg(test)]

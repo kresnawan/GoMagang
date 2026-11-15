@@ -24,12 +24,12 @@ pub struct PosisiMagang {
     pub id_posisi: i32,
     pub posisi: String,
     pub deskripsi_persyaratan: String,
-    /// How many will be accepted. Information only: registering is not limited by it.
+    /// Jumlah yang akan diterima. Hanya informasi: jumlah pendaftar tidak dibatasi olehnya.
     pub kuota: i32,
     pub id_periode: i32,
     #[sqlx(flatten)]
     pub perusahaan: PerusahaanMitra,
-    /// Set once the position has been hidden, in WIB.
+    /// Terisi setelah posisi disembunyikan, dalam WIB.
     pub deleted_at: Option<String>,
 }
 
@@ -57,8 +57,8 @@ impl CreatePosisi {
     }
 }
 
-/// What can be changed on a position. Its company and period stay as they are, as the pendaftaran
-/// on it belong to them.
+/// Bagian posisi yang boleh diubah. Perusahaan dan periodenya tetap, karena pendaftaran pada posisi
+/// itu terikat ke keduanya.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UbahPosisi {

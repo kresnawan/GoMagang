@@ -1,5 +1,6 @@
-//! Temporary way to register Panitia Magang until there is an admin flow. To remove it, delete this
-//! folder, its line in `features/mod.rs`, and `admin_secret` in `Config` and `AppState`.
+//! Cara sementara untuk mendaftarkan Panitia Magang sampai ada alur admin. Untuk menghapusnya,
+//! hapus folder ini, barisnya di `features/mod.rs`, serta `admin_secret` di `Config` dan
+//! `AppState`.
 
 mod handler;
 mod middleware;

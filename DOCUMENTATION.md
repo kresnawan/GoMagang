@@ -1,103 +1,52 @@
-# Dokumentasi API GoMagang
-
-Daftar endpoint yang tersedia di backend saat ini. File ini diperbarui setiap kali ada endpoint yang ditambah atau diubah, dan riwayatnya ada di [bagian paling bawah](#riwayat-perubahan).
-
-**Terakhir diperbarui:** 10 November 2026
+# Dokumentasi
 
 ## Ringkasan
 
-Base URL lokal: `http://localhost:3000`
-
-| Status | Arti |
-|---|---|
-| ✅ Jadi | Sudah memakai logika dan data sungguhan |
-| 🚧 Placeholder | Route ada, tapi hanya mengembalikan teks `TODO` |
-
-Kolom **Frontend** menunjukkan apakah `gomagang-web` sudah memanggil endpoint itu, atau halamannya masih memakai data mock.
-
-| Method | Path | Fungsi | Akses | Status | Frontend |
-|---|---|---|---|---|---|
-| `GET` | [`/auth/google/login`](#get-authgooglelogin) | Memulai login Google | Publik | ✅ Jadi | Tersambung |
-| `GET` | [`/auth/google`](#get-authgoogle) | Callback dari Google setelah login | Dipanggil oleh Google | ✅ Jadi | Lewat Google |
-| `GET` | [`/auth/me`](#get-authme) | Mengambil data user yang sedang login | Login | ✅ Jadi | Tersambung |
-| `POST` | [`/auth/refresh`](#post-authrefresh) | Memperbarui access dan refresh token | Refresh token | ✅ Jadi | Tersambung |
-| `POST` | [`/auth/logout`](#post-authlogout) | Logout dari perangkat yang dipakai | Publik | ✅ Jadi | Tersambung |
-| `GET` | [`/api/v1/mahasiswa/data`](#get-apiv1mahasiswadata) | Mengambil data mahasiswa yang sedang login | Mahasiswa | ✅ Jadi | Tersambung |
-| `PATCH` | [`/api/v1/mahasiswa/data`](#patch-apiv1mahasiswadata) | Mengubah sebagian data mahasiswa yang sedang login | Mahasiswa | ✅ Jadi | Tersambung |
-| `GET` | [`/api/v1/posisi`](#get-apiv1posisi) | Daftar posisi magang | Mahasiswa, Panitia Magang | ✅ Jadi | Tersambung: halaman Pendaftaran dan Katalog |
-| `POST` | [`/api/v1/posisi`](#post-apiv1posisi) | Membuat posisi magang | Panitia Magang | ✅ Jadi | Tersambung: halaman Katalog |
-| `PATCH` | [`/api/v1/posisi/{id}`](#patch-apiv1posisiid) | Mengubah nama, kuota, dan deskripsi posisi magang | Panitia Magang | ✅ Jadi | Tersambung: halaman Katalog |
-| `DELETE` | [`/api/v1/posisi/{id}`](#delete-apiv1posisiid) | Menyembunyikan posisi magang (soft delete) | Panitia Magang | ✅ Jadi | Tersambung: halaman Katalog |
-| `GET` | [`/api/v1/periode`](#get-apiv1periode) | Daftar periode pendaftaran | Mahasiswa, Panitia Magang | ✅ Jadi | Tersambung: halaman Periode, Katalog, dan Pendaftar |
-| `POST` | [`/api/v1/periode`](#post-apiv1periode) | Membuat periode pendaftaran | Panitia Magang | ✅ Jadi | Tersambung |
-| `PATCH` | [`/api/v1/periode/{id}/start`](#patch-apiv1periodeidstart) | Memulai periode saat itu juga | Panitia Magang | ✅ Jadi | Tersambung: halaman Periode |
-| `PATCH` | [`/api/v1/periode/{id}/stop`](#patch-apiv1periodeidstop) | Menghentikan periode saat itu juga | Panitia Magang | ✅ Jadi | Tersambung: halaman Periode |
-| `GET` | [`/api/v1/perusahaan`](#get-apiv1perusahaan) | Daftar perusahaan mitra | Mahasiswa, Panitia Magang | ✅ Jadi | Tersambung |
-| `POST` | [`/api/v1/perusahaan`](#post-apiv1perusahaan) | Membuat perusahaan mitra | Panitia Magang | ✅ Jadi | Tersambung |
-| `PATCH` | [`/api/v1/perusahaan/{id}`](#patch-apiv1perusahaanid) | Mengubah nama perusahaan mitra | Panitia Magang | ✅ Jadi | Tersambung: halaman Perusahaan |
-| `DELETE` | [`/api/v1/perusahaan/{id}`](#delete-apiv1perusahaanid) | Menyembunyikan perusahaan mitra (soft delete) | Panitia Magang | ✅ Jadi | Tersambung: halaman Perusahaan |
-| `GET` | [`/api/v1/mata-kuliah`](#get-apiv1mata-kuliah) | Daftar mata kuliah konversi | Mahasiswa, Panitia Magang | ✅ Jadi | Tersambung: halaman Konversi MK (mahasiswa dan Panitia Magang) |
-| `POST` | [`/api/v1/mata-kuliah`](#post-apiv1mata-kuliah) | Menambah mata kuliah konversi beserta SKS-nya | Panitia Magang | ✅ Jadi | Tersambung: halaman Konversi MK Panitia Magang |
-| `DELETE` | [`/api/v1/mata-kuliah/{id}`](#delete-apiv1mata-kuliahid) | Menghapus mata kuliah konversi (soft delete) | Panitia Magang | ✅ Jadi | Tersambung: halaman Konversi MK Panitia Magang |
-| `GET` | [`/api/v1/pendaftaran/{id}/penyetaraan-mk`](#get-apiv1pendaftaranidpenyetaraan-mk) | Mata kuliah yang dipilih untuk satu pendaftaran | Mahasiswa (miliknya), Panitia Magang (semua) | ✅ Jadi | Tersambung: halaman Konversi MK mahasiswa |
-| `POST` | [`/api/v1/pendaftaran/{id}/penyetaraan-mk`](#post-apiv1pendaftaranidpenyetaraan-mk) | Memilih mata kuliah untuk pendaftaran berstatus Aktif | Mahasiswa pemilik pendaftaran | ✅ Jadi | Tersambung: halaman Konversi MK mahasiswa |
-| `DELETE` | [`/api/v1/penyetaraan-mk/{id}`](#delete-apiv1penyetaraan-mkid) | Membatalkan pilihan mata kuliah | Mahasiswa pemilik pendaftaran | ✅ Jadi | Tersambung: halaman Konversi MK mahasiswa |
-| `POST` | [`/api/v1/panitia-magang`](#post-apiv1panitia-magang-sementara) | Mendaftarkan anggota Panitia Magang baru (sementara) | `ADMIN_SECRET` | ✅ Jadi | Tidak dipakai, lewat `curl` |
-| `POST` | [`/api/v1/pendaftaran`](#post-apiv1pendaftaran) | Mendaftar ke posisi magang, beserta unggah berkas | Mahasiswa | ✅ Jadi | Tersambung: form pendaftaran |
-| `PATCH` | [`/api/v1/pendaftaran?id={id}`](#patch-apiv1pendaftaran) | Mengubah status pendaftaran | Panitia Magang | ✅ Jadi | Tersambung: dialog Pendaftar |
-| `PUT` | [`/api/v1/pendaftaran/jadwal-seleksi-substansi`](#put-apiv1pendaftaranjadwal-seleksi-substansi) | Menyimpan satu jadwal seleksi substansi untuk satu atau banyak pendaftaran | Panitia Magang | ✅ Jadi | Tersambung: halaman Pendaftar |
-| `PUT` | [`/api/v1/pendaftaran/plot-dpm`](#put-apiv1pendaftaranplot-dpm) | Menyimpan satu plotting DPM untuk satu atau banyak pendaftaran | Panitia Magang | ✅ Jadi | Tersambung: halaman Pendaftar |
-| `POST` | [`/api/v1/pendaftaran/ekspor`](#post-apiv1pendaftaranekspor) | Mengekspor pendaftaran terpilih ke Excel (.xlsx) | Panitia Magang | ✅ Jadi | Tersambung: halaman Pendaftar |
-| `PATCH` | [`/api/v1/pendaftaran/accept?id={id}`](#patch-apiv1pendaftaranaccept) | Mengonfirmasi penerimaan, status `Diterima` menjadi `Aktif` | Mahasiswa pemilik pendaftaran | ✅ Jadi | Tersambung: halaman detail pendaftaran |
-| `GET` | [`/api/v1/berkas/{id_berkas}`](#get-apiv1berkasid_berkas) | Mengunduh berkas pendaftaran | Pemilik berkas, Panitia Magang | ✅ Jadi | Tersambung |
-| `GET` | [`/api/v1/berkas/publik/{token}`](#get-apiv1berkaspubliktoken) | Membuka berkas pendaftaran lewat link dari file ekspor, tanpa login | Publik, dengan link yang masih berlaku | ✅ Jadi | Tersambung: halaman `/berkas/{token}` |
-| `GET` | [`/api/v1/pendaftaran/{id}/surat-keterangan`](#get-apiv1pendaftaranidsurat-keterangan) | Mengunduh surat keterangan magang, diterbitkan dan ditandatangani saat pertama diunduh | Mahasiswa pemilik pendaftaran, Panitia Magang | ✅ Jadi | Tersambung: halaman detail pendaftaran |
-| `GET` | [`/api/v1/surat-keterangan/verifikasi?kode=`](#get-apiv1surat-keteranganverifikasi) | Memverifikasi surat dari kode di QR-nya | Publik | ✅ Jadi | Tersambung: halaman `/verifikasi-surat` |
-| `POST` | [`/api/v1/surat-keterangan/verifikasi`](#post-apiv1surat-keteranganverifikasi) | Memverifikasi surat dari berkas PDF-nya | Publik | ✅ Jadi | Tersambung: halaman `/verifikasi-surat` |
-| `GET` | [`/api/v1/surat-keterangan/kunci-publik`](#get-apiv1surat-keterangankunci-publik) | Kunci publik Ed25519 penanda tangan surat | Publik | ✅ Jadi | Tidak dipakai |
-| `GET` | [`/api/v1/pendaftaran`](#get-apiv1pendaftaran) | Daftar pendaftaran per halaman, bisa disaring menurut periode, status, perusahaan, dan posisi | Mahasiswa (miliknya), Panitia Magang (semua) | ✅ Jadi | Tersambung: halaman Dasbor, Konversi MK, dan Pendaftar |
-| `GET` | [`/api/v1/pendaftaran/{id}`](#get-apiv1pendaftaranid) | Detail pendaftaran | Mahasiswa (miliknya), Panitia Magang (semua) | ✅ Jadi | Tersambung: halaman detail pendaftaran dan dialog Pendaftar |
-| `GET` | [`/api/v1/templat-sp-dpa`](#get-apiv1templat-sp-dpa) | Tautan templat surat pernyataan DPA yang berlaku | Mahasiswa, Panitia Magang | ✅ Jadi | Tersambung: halaman Templat SP DPA (mahasiswa dan Panitia Magang) dan form pendaftaran |
-| `PUT` | [`/api/v1/templat-sp-dpa`](#put-apiv1templat-sp-dpa) | Mengganti tautan templat surat pernyataan DPA | Panitia Magang | ✅ Jadi | Tersambung: halaman Templat SP DPA Panitia Magang |
-
-## Progress
-
-**Semua 44 endpoint sudah jadi**, tidak ada lagi yang placeholder.
-
-| Area | Backend | Frontend |
-|---|---|---|
-| Login Google, access token, refresh token, logout | ✅ Jadi | Tersambung |
-| Data diri mahasiswa | ✅ Baca dan ubah | Tersambung |
-| Posisi magang | ✅ Baca, tambah, ubah, dan sembunyikan | Tersambung |
-| Periode | ✅ Baca, tambah, mulai, dan hentikan | Tersambung |
-| Perusahaan mitra | ✅ Baca, tambah, ubah nama, dan sembunyikan | Tersambung |
-| Pendaftaran Panitia Magang (`POST /api/v1/panitia-magang`) | ✅ Sementara, lewat `curl` | Tidak dipakai |
-| Pendaftaran mahasiswa | ✅ Kirim, daftar, detail, unduh berkas, dan konfirmasi penerimaan | Tersambung |
-| Pengelolaan pendaftar oleh Panitia Magang | ✅ Baca, cari, saring, ubah status, jadwal seleksi, plotting DPM, dan ekspor Excel | Tersambung |
-| Surat keterangan magang | 🟡 Dibuat dari template, ditandatangani, dan bisa diverifikasi, tapi sebagian isinya masih mockup | Tersambung: unduh di detail pendaftaran dan halaman verifikasi publik |
-| Konversi mata kuliah | ✅ Katalog: baca, tambah, dan hapus (soft delete). Penyetaraan: baca, pilih, dan batalkan | Tersambung |
-| Templat SP DPA | ✅ Baca dan ganti tautan | Tersambung |
-
-### Yang masih perlu dibuat di backend
-
-Daftar ini diturunkan dari fitur frontend yang masih mock atau tombolnya masih nonaktif. Rancangan endpoint-nya belum ditentukan.
-
-**Panitia Magang:**
-- Daftar status beserta `id_status`, karena filter `status` di `GET /api/v1/pendaftaran` memakai id sedangkan frontend hanya mengenal nama status. Frontend kini menurunkannya dari urutan seed migration
-
-**Surat keterangan:** isi berikut masih mockup, dan ditandai `MOCK` di `src/features/surat_keterangan/templat.rs`. Surat yang sudah terbit tidak berubah saat mockup diganti, karena isinya dibekukan saat terbit.
-- Tanggal mulai dan selesai magang: sementara tanggal terbit sampai 120 hari setelahnya, karena yang tersimpan baru periode pendaftaran
-- Alamat perusahaan: `perusahaan_mitra` baru punya nama
-- Nama dan NIP pejabat penanda tangan, serta jenis program (Magang Mandiri atau MBKM)
-- Format nomor surat: sementara `{id_surat 5 digit}/SKM/MB-FILKOM/{tahun}`
-- Logo fakultas di kop surat: sementara bingkai bertuliskan `LOGO FILKOM`
-
-**Keamanan dan peran:**
-- `GET /auth/me` belum mengirim peran, jadi frontend menebaknya dari domain email
-
-### Yang sudah ada di backend, tapi belum dipakai frontend
-
-- `GET /api/v1/surat-keterangan/kunci-publik`: disediakan untuk pihak luar yang ingin memeriksa tanda tangan sendiri
+| Method | Path | Fungsi | Akses |
+|---|---|---|---|
+| `GET` | [`/auth/google/login`](#get-authgooglelogin) | Memulai login Google | Publik |
+| `GET` | [`/auth/google`](#get-authgoogle) | Callback dari Google setelah login | Dipanggil oleh Google |
+| `GET` | [`/auth/me`](#get-authme) | Mengambil data user yang sedang login | Login |
+| `POST` | [`/auth/refresh`](#post-authrefresh) | Memperbarui access dan refresh token | Refresh token |
+| `POST` | [`/auth/logout`](#post-authlogout) | Logout dari perangkat yang dipakai | Publik |
+| `GET` | [`/health`](#get-health) | Memeriksa apakah server hidup dan terhubung ke database | Publik |
+| `GET` | [`/api/v1/mahasiswa/data`](#get-apiv1mahasiswadata) | Mengambil data mahasiswa yang sedang login | Mahasiswa |
+| `PATCH` | [`/api/v1/mahasiswa/data`](#patch-apiv1mahasiswadata) | Mengubah sebagian data mahasiswa yang sedang login | Mahasiswa |
+| `GET` | [`/api/v1/posisi`](#get-apiv1posisi) | Daftar posisi magang | Mahasiswa, Panitia Magang |
+| `POST` | [`/api/v1/posisi`](#post-apiv1posisi) | Membuat posisi magang | Panitia Magang |
+| `PATCH` | [`/api/v1/posisi/{id}`](#patch-apiv1posisiid) | Mengubah nama, kuota, dan deskripsi posisi magang | Panitia Magang |
+| `DELETE` | [`/api/v1/posisi/{id}`](#delete-apiv1posisiid) | Menyembunyikan posisi magang (soft delete) | Panitia Magang |
+| `GET` | [`/api/v1/periode`](#get-apiv1periode) | Daftar periode pendaftaran | Mahasiswa, Panitia Magang |
+| `POST` | [`/api/v1/periode`](#post-apiv1periode) | Membuat periode pendaftaran | Panitia Magang |
+| `PATCH` | [`/api/v1/periode/{id}/start`](#patch-apiv1periodeidstart) | Memulai periode saat itu juga | Panitia Magang |
+| `PATCH` | [`/api/v1/periode/{id}/stop`](#patch-apiv1periodeidstop) | Menghentikan periode saat itu juga | Panitia Magang |
+| `GET` | [`/api/v1/perusahaan`](#get-apiv1perusahaan) | Daftar perusahaan mitra | Mahasiswa, Panitia Magang |
+| `POST` | [`/api/v1/perusahaan`](#post-apiv1perusahaan) | Membuat perusahaan mitra | Panitia Magang |
+| `PATCH` | [`/api/v1/perusahaan/{id}`](#patch-apiv1perusahaanid) | Mengubah nama perusahaan mitra | Panitia Magang |
+| `DELETE` | [`/api/v1/perusahaan/{id}`](#delete-apiv1perusahaanid) | Menyembunyikan perusahaan mitra (soft delete) | Panitia Magang |
+| `GET` | [`/api/v1/mata-kuliah`](#get-apiv1mata-kuliah) | Daftar mata kuliah konversi | Mahasiswa, Panitia Magang |
+| `POST` | [`/api/v1/mata-kuliah`](#post-apiv1mata-kuliah) | Menambah mata kuliah konversi beserta SKS-nya | Panitia Magang |
+| `DELETE` | [`/api/v1/mata-kuliah/{id}`](#delete-apiv1mata-kuliahid) | Menghapus mata kuliah konversi (soft delete) | Panitia Magang |
+| `GET` | [`/api/v1/pendaftaran/{id}/penyetaraan-mk`](#get-apiv1pendaftaranidpenyetaraan-mk) | Mata kuliah yang dipilih untuk satu pendaftaran | Mahasiswa (miliknya), Panitia Magang (semua) |
+| `POST` | [`/api/v1/pendaftaran/{id}/penyetaraan-mk`](#post-apiv1pendaftaranidpenyetaraan-mk) | Memilih mata kuliah untuk pendaftaran berstatus Aktif | Mahasiswa pemilik pendaftaran |
+| `DELETE` | [`/api/v1/penyetaraan-mk/{id}`](#delete-apiv1penyetaraan-mkid) | Membatalkan pilihan mata kuliah | Mahasiswa pemilik pendaftaran |
+| `POST` | [`/api/v1/panitia-magang`](#post-apiv1panitia-magang-sementara) | Mendaftarkan anggota Panitia Magang baru (sementara) | `ADMIN_SECRET` |
+| `POST` | [`/api/v1/pendaftaran`](#post-apiv1pendaftaran) | Mendaftar ke posisi magang, beserta unggah berkas | Mahasiswa |
+| `PATCH` | [`/api/v1/pendaftaran?id={id}`](#patch-apiv1pendaftaran) | Mengubah status pendaftaran | Panitia Magang |
+| `PUT` | [`/api/v1/pendaftaran/jadwal-seleksi-substansi`](#put-apiv1pendaftaranjadwal-seleksi-substansi) | Menyimpan satu jadwal seleksi substansi untuk satu atau banyak pendaftaran | Panitia Magang |
+| `PUT` | [`/api/v1/pendaftaran/plot-dpm`](#put-apiv1pendaftaranplot-dpm) | Menyimpan satu plotting DPM untuk satu atau banyak pendaftaran | Panitia Magang |
+| `POST` | [`/api/v1/pendaftaran/ekspor`](#post-apiv1pendaftaranekspor) | Mengekspor pendaftaran terpilih ke Excel (.xlsx) | Panitia Magang |
+| `PATCH` | [`/api/v1/pendaftaran/accept?id={id}`](#patch-apiv1pendaftaranaccept) | Mengonfirmasi penerimaan, status `Diterima` menjadi `Aktif` | Mahasiswa pemilik pendaftaran |
+| `GET` | [`/api/v1/berkas/{id_berkas}`](#get-apiv1berkasid_berkas) | Mengunduh berkas pendaftaran | Pemilik berkas, Panitia Magang |
+| `GET` | [`/api/v1/berkas/publik/{token}`](#get-apiv1berkaspubliktoken) | Membuka berkas pendaftaran lewat link dari file ekspor, tanpa login | Publik, dengan link yang masih berlaku |
+| `GET` | [`/api/v1/pendaftaran/{id}/surat-keterangan`](#get-apiv1pendaftaranidsurat-keterangan) | Mengunduh surat keterangan magang, diterbitkan dan ditandatangani saat pertama diunduh | Mahasiswa pemilik pendaftaran, Panitia Magang |
+| `GET` | [`/api/v1/surat-keterangan/verifikasi?kode=`](#get-apiv1surat-keteranganverifikasi) | Memverifikasi surat dari kode di QR-nya | Publik |
+| `POST` | [`/api/v1/surat-keterangan/verifikasi`](#post-apiv1surat-keteranganverifikasi) | Memverifikasi surat dari berkas PDF-nya | Publik |
+| `GET` | [`/api/v1/surat-keterangan/kunci-publik`](#get-apiv1surat-keterangankunci-publik) | Kunci publik Ed25519 penanda tangan surat | Publik |
+| `GET` | [`/api/v1/pendaftaran`](#get-apiv1pendaftaran) | Daftar pendaftaran per halaman, bisa disaring menurut periode, status, perusahaan, dan posisi | Mahasiswa (miliknya), Panitia Magang (semua) |
+| `GET` | [`/api/v1/pendaftaran/{id}`](#get-apiv1pendaftaranid) | Detail pendaftaran | Mahasiswa (miliknya), Panitia Magang (semua) |
+| `GET` | [`/api/v1/templat-sp-dpa`](#get-apiv1templat-sp-dpa) | Tautan templat surat pernyataan DPA yang berlaku | Mahasiswa, Panitia Magang |
+| `PUT` | [`/api/v1/templat-sp-dpa`](#put-apiv1templat-sp-dpa) | Mengganti tautan templat surat pernyataan DPA | Panitia Magang |
 
 ## Autentikasi
 
@@ -108,7 +57,7 @@ Backend memakai dua cookie httpOnly, jadi JavaScript tidak bisa membacanya dan t
 | `access_token` | 15 menit | `/` | JWT berisi `id_pengguna` dan `email` |
 | `refresh_token` | 7 hari sejak login, tidak diperpanjang saat refresh | `/auth` | String acak, hanya hash-nya yang disimpan di tabel `token_refresh` |
 
-Semua request dari frontend harus mengirim cookie, misalnya `withCredentials: true` di axios. Origin frontend juga harus terdaftar di `CORS_ALLOWED_ORIGINS`, dan CORS hanya mengizinkan method `GET`, `POST`, `PATCH`, `PUT`, dan `DELETE`, dan membuka header `Content-Disposition` supaya frontend bisa membaca nama file unduhan.
+Semua request dari frontend harus mengirim cookie, misalnya `withCredentials: true` di axios. Origin frontend juga harus terdaftar di `CORS_ALLOWED_ORIGINS`, dan CORS hanya mengizinkan method `GET`, `POST`, `PATCH`, `PUT`, dan `DELETE`, dan membuka header `Content-Disposition` supaya frontend bisa membaca nama file unduhan, serta `X-Request-Id` (lihat [Request ID](#request-id)).
 
 ### Siapa yang boleh login
 
@@ -134,6 +83,15 @@ Error `409` dan error dari aturan validasi `422` membawa pesan yang bisa langsun
 | `415` | Header `Content-Type: application/json` tidak dikirim |
 | `422` | Isi body ditolak. Salah tipe, `null`, atau field tak dikenal dibalas teks biasa dari framework, sedangkan aturan validasi dibalas format di atas |
 | `500` | Terjadi kesalahan di server |
+
+### Request ID
+
+Setiap respons, termasuk respons error, membawa header `X-Request-Id`. Nilai yang sama tercatat di log server untuk request itu, jadi saat user melaporkan error, frontend cukup menampilkan atau mengirimkan nilai ini agar request-nya mudah ditemukan di log.
+
+- Bila request tidak membawa `X-Request-Id`, server membuat UUID v4 baru.
+- Bila request sudah membawa `X-Request-Id` (biasanya dari reverse proxy), nilai itu dipakai apa adanya, asalkan panjangnya 1–128 karakter dan hanya berisi huruf, angka, `-`, `_`, `.`, atau `:`. Selain itu, termasuk header yang dikirim lebih dari sekali, nilainya diganti UUID baru.
+
+Log server ditulis ke stdout, satu objek JSON per baris, berisi method, pola route (misalnya `/api/v1/berkas/publik/{token}`, bukan path aslinya, sehingga token dan query string tidak masuk log), status, dan lama proses. Level log diatur lewat env `RUST_LOG`, default `gomagang=info,tower_http=info`.
 
 ## Endpoint auth
 
@@ -204,6 +162,33 @@ Logout dari perangkat yang sedang dipakai. Tanpa body. Login di perangkat lain t
 | `500` | Terjadi kesalahan di server. Cookie tidak dihapus, jadi user masih login |
 
 Access token yang sudah tersalin tetap valid sampai kedaluwarsa, maksimal 15 menit.
+
+## Endpoint health check
+
+### `GET /health`
+
+Memeriksa apakah server hidup dan bisa menjangkau database. Dipakai untuk monitoring, misalnya oleh reverse proxy atau uptime checker, bukan oleh frontend. Tidak butuh login dan tanpa body request.
+
+Dipasang di root seperti `/auth`, bukan di bawah `/api/v1`.
+
+**Yang dilakukan:** menjalankan `SELECT 1` ke database dengan batas waktu 3 detik.
+
+Respons `200`:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+| Status | Arti |
+|---|---|
+| `200` | Server hidup dan database menjawab |
+| `503` | Database gagal menjawab atau tidak menjawab dalam 3 detik. Tanpa body; penyebabnya dicatat di log server |
+
+```bash
+curl -i http://localhost:3000/health
+```
 
 ## Endpoint mahasiswa
 
@@ -1691,100 +1676,3 @@ Mengganti tautan templat yang berlaku. Hanya untuk Panitia Magang, dilindungi mi
 | `403` | User bukan Panitia Magang |
 | `415` | Header `Content-Type: application/json` tidak dikirim |
 | `422` | Isi body ditolak |
-
-## Riwayat perubahan
-
-### 12 November 2026
-
-- `DELETE /api/v1/mahasiswa` dan `POST /api/v1/mahasiswa/seed` (endpoint sementara untuk uji coba) dihapus, beserta folder `src/features/data_uji_coba`. `ADMIN_SECRET` kini hanya dipakai `POST /api/v1/panitia-magang`.
-
-### 11 November 2026
-
-- Konfirmasi penerimaan kini dibatasi 1 x 12 jam sejak status menjadi `Diterima`. `GET /api/v1/pendaftaran` dan `GET /api/v1/pendaftaran/{id}` mengirim field baru `batas_konfirmasi`. `PATCH /api/v1/pendaftaran/accept` menolak konfirmasi yang terlambat dengan `409`, dan server membatalkan otomatis pendaftaran yang tidak dikonfirmasi menjadi `Batal/Mengundurkan Diri`, disertai email pemberitahuan. Email untuk status `Diterima` kini berisi peringatan tegas tentang batas waktu tersebut.
-- Email pemberitahuan perubahan status kini berupa HTML dengan logo, ikon status, dan tombol ke detail pendaftaran, dengan versi teks biasa sebagai cadangan.
-- `PATCH /api/v1/pendaftaran` kini mengirim email pemberitahuan ke mahasiswa setiap kali Panitia Magang berhasil mengubah status pendaftarannya. Env baru: `SMTP_HOST`, `SMTP_PORT`, `SMTP_TLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM`. Tanpa `SMTP_HOST`, email tidak dikirim.
-- `POST /api/v1/pendaftaran`: batas pendaftaran kini 2 kali per periode, dihitung dari semua pendaftaran di periode posisi yang dituju apa pun statusnya. Sebelumnya batasnya 2 pendaftaran yang masih berjalan, sehingga pendaftaran yang batal, tidak lolos, atau selesai membuka jatah baru. Pesan `409`-nya kini `Kamu sudah mendaftar 2 kali di periode ini.`
-- Penamaan **Tim MB** diganti menjadi **Panitia Magang** di seluruh backend, tanpa perubahan perilaku. Tabel `tim_mb` menjadi `panitia_magang` beserta nama constraint-nya, lewat migration `20261111000000_rename_tim_mb_menjadi_panitia_magang.sql`. `POST /api/v1/tim-mb` menjadi [`POST /api/v1/panitia-magang`](#post-apiv1panitia-magang-sementara), middleware `require_tim_mb` menjadi `require_panitia_magang`, dan setelah login akun Panitia Magang kini diarahkan ke `/panitia-magang`, bukan `/tim-mb`. Catatan riwayat di bawah ini tetap memakai nama lama.
-
-### 10 November 2026
-
-- Placeholder `GET /api/v1/templat-sp-dpa` diganti endpoint sungguhan yang mengembalikan tautan templat surat pernyataan DPA yang berlaku (atau `null`), kini dilindungi autentikasi untuk mahasiswa dan Tim MB. `PUT /api/v1/templat-sp-dpa` ditambahkan untuk Tim MB mengganti tautannya. Tautan lama tetap tersimpan sebagai riwayat.
-- Konversi mata kuliah ditambahkan. `GET`, `POST /api/v1/mata-kuliah` dan `DELETE /api/v1/mata-kuliah/{id}` untuk katalog (tambah dan hapus hanya Tim MB, hapus berupa soft delete). `GET`, `POST /api/v1/pendaftaran/{id}/penyetaraan-mk` dan `DELETE /api/v1/penyetaraan-mk/{id}` untuk mahasiswa memilih mata kuliah pada pendaftaran `Aktif`. Migration `20261110000002_mata_kuliah_soft_delete.sql` menambah kolom `deleted_at` di `mata_kuliah_konversi`, serta constraint unik `(id_pendaftaran, id_mk_konversi)` di `penyetaraan_mk` setelah membuang pilihan ganda yang mungkin sudah ada.
-- `PATCH /api/v1/posisi/{id}` dan `DELETE /api/v1/posisi/{id}` ditambahkan, untuk Tim MB mengubah nama, kuota, dan deskripsi posisi magang, serta menyembunyikannya (soft delete). `GET /api/v1/posisi` kini mengirim `deleted_at` dan menerima `termasuk_dihapus`. Posisi yang disembunyikan tidak bisa didaftar.
-- Perbaikan: `POST /api/v1/mahasiswa/seed` tidak lagi memakai posisi dari perusahaan yang sudah disembunyikan.
-- `PATCH /api/v1/perusahaan/{id}` dan `DELETE /api/v1/perusahaan/{id}` ditambahkan, untuk Tim MB mengubah nama dan menyembunyikan perusahaan mitra (soft delete). `GET /api/v1/perusahaan` kini mengirim `deleted_at` dan menerima `termasuk_dihapus`. Posisi dari perusahaan yang disembunyikan hilang dari katalog dan tidak bisa didaftar. CORS kini mengizinkan method `DELETE`.
-
-### 9 November 2026
-
-- `POST /api/v1/mahasiswa/seed` kini menambahkan 50 mahasiswa, bukan 200. Setiap pendaftaran punya file PDF contoh sungguhan untuk Surat Pernyataan DPA dan CV, dan sebagian juga punya 1 sampai 3 berkas tambahan. Respons kini juga berisi `jumlah_berkas`.
-- `POST /api/v1/pendaftaran/ekspor` ditambahkan, untuk Tim MB mengekspor pendaftaran terpilih ke Excel (.xlsx), lengkap dengan link publik ke setiap berkas yang berlaku 30 hari. Dependency baru: `rust_xlsxwriter`, dan `zip` untuk pengujian.
-- `GET /api/v1/berkas/publik/{token}` ditambahkan, untuk membuka berkas dari link di file ekspor tanpa login.
-- `POST /api/v1/pendaftaran` kini menerima field opsional `berkas_tambahan` (portfolio dan berkas tambahan), maksimal 5 file PDF, disimpan di `berkas_pendaftaran` dengan jenis `Portfolio dan Berkas Tambahan`. Ekspor Excel memberi kolom URL bernomor untuk berkas sejenis yang lebih dari satu.
-- `GET /api/v1/pendaftaran` kini menerima query `posisi` (`id_posisi`), untuk menyaring pendaftaran per posisi magang.
-- `POST /api/v1/mahasiswa/seed` kini membagi pendaftaran rata ke semua posisi di periode yang sedang berlangsung, bukan acak murni, sehingga setiap posisi pasti mendapat pendaftar.
-
-### 6 November 2026
-
-- Kuota posisi kini kuota penerimaan dan hanya sebagai informasi. Kolom `kuota_total` diganti nama menjadi `kuota` dan `sisa_kuota` dihapus, lewat migration `20261106000001_kuota_posisi_sebagai_informasi.sql`. Di API, field `kuota_total` menjadi `kuota`, dan `sisa_kuota` dihapus dari respons `GET` dan `POST /api/v1/posisi`.
-- `POST /api/v1/pendaftaran` tidak lagi menolak pendaftaran karena kuota penuh. Query `is_full` di `GET /api/v1/posisi` dihapus, dan `DELETE /api/v1/mahasiswa` tidak lagi mengubah kuota.
-- Surat keterangan magang kini dibuat backend dari template, ditandatangani dengan Ed25519, dan diverifikasi lewat QR atau berkas PDF: `GET /api/v1/pendaftaran/{id}/surat-keterangan`, `GET` dan `POST /api/v1/surat-keterangan/verifikasi`, serta `GET /api/v1/surat-keterangan/kunci-publik`. Env baru: `SURAT_SIGNING_KEY`.
-- Tabel `surat_keterangan` mendapat kolom `nomor_surat`, `isi`, `tanda_tangan`, dan `hash_berkas`, lewat migration `20261106000000_surat_keterangan_bertanda_tangan.sql`.
-- `GET /api/v1/pendaftaran/{id}` kini mengirim `nomor_surat` di `surat_keterangan`.
-- `DELETE /api/v1/mahasiswa` kini ikut menghapus file surat keterangan, dan menghitungnya di `jumlah_berkas`.
-- CORS kini membuka header `Content-Disposition`.
-- Status frontend diperbarui: plotting DPM, filter dan pencarian daftar pendaftar, serta surat keterangan kini tersambung ke API.
-
-### 5 November 2026
-
-- `PUT /api/v1/pendaftaran/plot-dpm` ditambahkan, untuk Tim MB menyimpan plotting DPM pada satu atau banyak pendaftaran.
-- Default `r` di `GET /api/v1/pendaftaran` diubah dari 10 menjadi 25.
-- `GET /api/v1/pendaftaran` kini menerima `s` untuk mencari pendaftaran menurut nama mahasiswa.
-- Status frontend diperbarui: menyimpan jadwal seleksi substansi kini tersambung ke API.
-- `GET /api/v1/pendaftaran` kini menerima filter `periode`, `status`, dan `perusahaan`. **Tanpa `p` dan `r`, responsnya kini halaman 1 dengan 10 baris**, bukan semua baris, dan `p` boleh dikirim tanpa `r`.
-- `GET /api/v1/pendaftaran` kini menerima query `p` dan `r`, dan **responsnya berubah dari array menjadi objek** berisi `data`, `page`, `rows`, `total`, dan `total_pages`.
-- `DELETE /api/v1/mahasiswa` kini menghapus semua mahasiswa dan tidak lagi menerima `email`. Kodenya pindah ke folder `src/features/data_uji_coba`.
-- `POST /api/v1/mahasiswa/seed` ditambahkan sebagai endpoint sementara untuk uji coba, dilindungi `ADMIN_SECRET`. Menambahkan 200 mahasiswa acak, masing-masing dengan 1 pendaftaran.
-- `GET /api/v1/pendaftaran` kini mengirim `ada_jadwal_seleksi` dan `ada_plotting_dpm` pada setiap pendaftaran.
-- Perbaikan: `PATCH /api/v1/pendaftaran` dan `PUT /api/v1/pendaftaran/jadwal-seleksi-substansi` bisa keliru menjawab `404` kalau status pendaftaran berubah saat request sedang menunggu. Kini keduanya memeriksa status terbaru.
-- Status frontend diperbarui: mengubah status pendaftaran dan konfirmasi penerimaan kini tersambung ke API.
-- `PUT /api/v1/pendaftaran/jadwal-seleksi-substansi` ditambahkan, untuk Tim MB menyimpan jadwal seleksi substansi pada satu atau banyak pendaftaran, dan CORS kini mengizinkan method `PUT`.
-- `DELETE /api/v1/mahasiswa` ditambahkan sebagai endpoint sementara untuk uji coba, dilindungi `ADMIN_SECRET`. Menghapus mahasiswa beserta semua datanya dan filenya, serta mengembalikan kuota.
-- `PATCH /api/v1/pendaftaran/accept` ditambahkan, untuk mahasiswa mengonfirmasi penerimaan. Pendaftaran lain yang masih berjalan otomatis menjadi `Batal/Mengundurkan Diri`, dan kuotanya tidak kembali.
-- `POST /api/v1/pendaftaran` kini menolak mahasiswa yang punya pendaftaran `Aktif`.
-- `PATCH /api/v1/pendaftaran` ditambahkan, untuk Tim MB mengubah status pendaftaran.
-- Status frontend diperbarui: pendaftaran, unduh berkas, serta memulai dan menghentikan periode kini tersambung ke API.
-- `PATCH /api/v1/periode/{id}/stop` ditambahkan, untuk menghentikan periode saat itu juga.
-- `PATCH /api/v1/periode/{id}/start` ditambahkan, untuk memulai periode saat itu juga.
-
-### 4 November 2026
-
-- `GET /api/v1/pendaftaran` dan `GET /api/v1/pendaftaran/{id}` diimplementasikan, menggantikan placeholder, dan kini dilindungi autentikasi.
-- Status frontend diperbarui: perusahaan, tambah posisi, dan dropdown periode di halaman Pendaftar kini tersambung ke API.
-- `POST /api/v1/pendaftaran` ditambahkan, menerima unggahan dua berkas PDF dan menyimpannya di folder `uploads/`.
-- `GET /api/v1/berkas/{id_berkas}` ditambahkan, hanya untuk pemilik berkas dan Tim MB.
-- Tabel `status_pendaftaran` kini terisi tujuh status lewat migration.
-- `GET` dan `POST /api/v1/perusahaan` ditambahkan.
-- `POST /api/v1/posisi` ditambahkan.
-- `POST /api/v1/periode` ditambahkan, bersama middleware `require_tim_mb`.
-- `POST /api/v1/tim-mb` ditambahkan sebagai endpoint sementara, dilindungi `ADMIN_SECRET`.
-- `GET /api/v1/periode` diimplementasikan, menggantikan placeholder, dengan filter `id` dan `status`.
-- `GET /api/v1/posisi` menggantikan placeholder `GET /api/v1/lowongan`, yang sudah dihapus.
-- `PATCH /api/v1/mahasiswa/data` ditambahkan, dan CORS kini mengizinkan method `PATCH`.
-- `GET /auth/google` menerima akun `@gmail.com` yang terdaftar di `tim_mb`, mengarahkannya ke `/tim-mb`, dan menambah error `not_registered`.
-- `GET /auth/google/login` tidak lagi mengirim `hd` ke Google, supaya akun Gmail bisa dipilih.
-- `GET /auth/google` otomatis membuat baris `mahasiswa` untuk akun student.
-- `GET /api/v1/mahasiswa/data` menambah `jenis_kelamin` dan `semester`, dan `nim` boleh `null`.
-- `GET /auth/me` mengembalikan `id_pengguna` dan `email`, tanpa nama.
-- Dokumentasi ini dibuat, lalu ditambah bagian progress dan status frontend.
-- Status frontend diperbarui: periode dan katalog posisi kini tersambung ke API.
-
-### 3 November 2026
-
-- `GET /api/v1/mahasiswa/data` ditambahkan dengan middleware `require_mahasiswa`, menggantikan placeholder `GET /api/v1/data-diri`.
-- `POST /auth/refresh` ditambahkan. Session kini memakai access token 15 menit dan refresh token 7 hari.
-- `POST /auth/logout` kini mencabut refresh token di database.
-
-### 2 November 2026
-
-- Struktur fitur, konfigurasi CORS, dan route placeholder dibuat.
-- Login Google dibuat dengan authorization code flow: `GET /auth/google/login`, `GET /auth/google`, `GET /auth/me`, dan `POST /auth/logout`.

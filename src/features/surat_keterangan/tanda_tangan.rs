@@ -4,12 +4,13 @@ use base64::{
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
 
-/// Prefixed to everything signed, so that a signature made here cannot be passed off as one over
-/// some other kind of data signed with the same key.
+/// Awalan untuk semua yang ditandatangani, sehingga tanda tangan dari sini tidak bisa diaku sebagai
+/// tanda tangan atas jenis data lain yang ditandatangani dengan kunci yang sama.
 const KONTEKS: &[u8] = b"gomagang/surat-keterangan/v1\n";
 
-/// Signs and checks surat keterangan with the Ed25519 key from SURAT_SIGNING_KEY. Only the server
-/// holds the key, so nobody else can produce a signature that passes `cocok`.
+/// Menandatangani dan memeriksa surat keterangan dengan kunci Ed25519 dari `SURAT_SIGNING_KEY`.
+/// Hanya server yang memegang kunci ini, sehingga tidak ada pihak lain yang bisa membuat tanda
+/// tangan yang lolos `cocok`.
 pub struct PenandaSurat {
     kunci: Ed25519KeyPair,
 }

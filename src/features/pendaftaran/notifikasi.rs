@@ -1,6 +1,6 @@
-//! The email a mahasiswa gets when the status of their pendaftaran changes, by Panitia Magang or by
-//! the system cancelling an unconfirmed acceptance. The wording follows the dashboard in the
-//! frontend, so the two say the same thing.
+//! Email yang diterima mahasiswa saat status pendaftarannya berubah, baik oleh Panitia Magang
+//! maupun oleh sistem saat penerimaan yang tidak dikonfirmasi dibatalkan. Kalimatnya mengikuti
+//! dasbor di frontend, sehingga keduanya menyampaikan hal yang sama.
 
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
@@ -22,7 +22,7 @@ const IKON_GAGAL: GambarInline = GambarInline {
     png: include_bytes!("../../../assets/email/ikon-gagal.png"),
 };
 
-/// Badge colours, the same as the StatusBadge tones in the frontend.
+/// Warna badge status, sama dengan warna StatusBadge di frontend.
 struct Nada {
     latar: &'static str,
     teks: &'static str,
@@ -111,11 +111,11 @@ fn tampilan(status: &str) -> Tampilan {
     }
 }
 
-/// Who changed the status.
+/// Pihak yang mengubah status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pengubah {
     PanitiaMagang,
-    /// The time to confirm a Diterima pendaftaran ran out.
+    /// Tenggat konfirmasi pendaftaran `Diterima` sudah lewat.
     Sistem,
 }
 

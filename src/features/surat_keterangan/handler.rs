@@ -75,7 +75,7 @@ pub async fn unduh(
     let isi_berkas = fs::read(state.upload_dir.join(&surat.nama_berkas))
         .await
         .map_err(|err| {
-            eprintln!("failed to read surat {}: {err}", surat.id_surat);
+            tracing::error!(error = %err, id_surat = surat.id_surat, "failed to read surat");
             match err.kind() {
                 io::ErrorKind::NotFound => AppError::NotFound,
                 _ => AppError::Internal,
@@ -140,7 +140,7 @@ async fn terbitkan(
     let isi = isi_surat(pendaftaran, id_surat, tanggal_surat)?;
 
     let isi_json = serde_json::to_string(&isi).map_err(|err| {
-        eprintln!("failed to serialise surat: {err}");
+        tracing::error!(error = %err, "failed to serialise surat");
         AppError::Internal
     })?;
     let tanda_tangan = penanda.tandatangani(&isi_json);
@@ -148,7 +148,7 @@ async fn terbitkan(
     let halaman = format!("{}/verifikasi-surat", state.frontend_url);
     let url = format!("{halaman}?kode={}", kode(id_surat, &tanda_tangan));
     let pdf = dokumen::render(&isi, &url, &halaman).map_err(|err| {
-        eprintln!("failed to render surat: {err}");
+        tracing::error!(error = %err, "failed to render surat");
         AppError::Internal
     })?;
 
@@ -176,7 +176,7 @@ async fn terbitkan(
         fs::write(&path, &pdf).await
     };
     tulis.await.map_err(|err| {
-        eprintln!("failed to save surat: {err}");
+        tracing::error!(error = %err, "failed to save surat");
         AppError::Internal
     })?;
 
@@ -240,7 +240,7 @@ fn isi_surat(
 /// [`AppError::Internal`].
 fn baca_isi(surat: &SuratTersimpan) -> Result<IsiSurat, AppError> {
     serde_json::from_str(&surat.isi).map_err(|err| {
-        eprintln!("surat {} holds unreadable content: {err}", surat.id_surat);
+        tracing::error!(error = %err, id_surat = surat.id_surat, "surat holds unreadable content");
         AppError::Internal
     })
 }
@@ -337,5 +337,5 @@ pub async fn kunci_publik(State(state): State<AppState>) -> Result<Json<KunciPub
     }))
 }
 
-/// For the route: the body limit of the verification upload.
+/// Untuk route: batas ukuran body unggahan verifikasi.
 pub const BATAS_BODY_VERIFIKASI: usize = MAX_BERKAS_VERIFIKASI + 64 * 1024;

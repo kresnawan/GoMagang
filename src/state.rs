@@ -12,7 +12,8 @@ use crate::{
     },
 };
 
-// Shared dependencies for handlers go here.
+/// Dependency bersama yang dibutuhkan handler. Murah untuk di-clone karena isinya berupa `Arc` atau
+/// pool.
 #[derive(Clone)]
 pub struct AppState {
     pub db: PgPool,

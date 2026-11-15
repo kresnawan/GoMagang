@@ -17,7 +17,8 @@ pub const REFRESH_GRACE: Duration = Duration::from_secs(10);
 pub const REFRESH_COOKIE: &str = "refresh_token";
 
 const ACCESS_COOKIE: &str = "access_token";
-// Keeps the refresh token out of every request to the API.
+/// Membatasi cookie refresh token ke path `/auth`, sehingga token itu tidak ikut terkirim pada
+/// setiap request ke API.
 const REFRESH_COOKIE_PATH: &str = "/auth";
 
 pub struct SessionManager {

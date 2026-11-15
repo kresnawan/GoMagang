@@ -29,7 +29,7 @@ impl From<sqlx::Error> for AppError {
     /// `?`
     /// pada hasil query.
     fn from(err: sqlx::Error) -> Self {
-        eprintln!("database error: {err}");
+        tracing::error!(error = %err, "database error");
         AppError::Internal
     }
 }

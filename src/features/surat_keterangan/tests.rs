@@ -125,7 +125,7 @@ impl Ctx {
         self.cookie(&user)
     }
 
-    /// A pendaftaran of this mahasiswa with the given status.
+    /// Pendaftaran milik mahasiswa ini dengan status tertentu.
     async fn pendaftaran(&self, user: &User, status: &str) -> i32 {
         sqlx::query_scalar(
             "WITH perusahaan AS (

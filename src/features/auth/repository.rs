@@ -239,7 +239,7 @@ pub fn spawn_token_cleanup(db: PgPool) {
         loop {
             interval.tick().await;
             if let Err(err) = delete_expired_tokens(&db).await {
-                eprintln!("failed to delete expired refresh tokens: {err}");
+                tracing::error!(error = %err, "failed to delete expired refresh tokens");
             }
         }
     });

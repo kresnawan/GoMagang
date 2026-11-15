@@ -180,7 +180,7 @@ macro_rules! batas_konfirmasi {
               JOIN status_pendaftaran ls ON ls.id_status = l.status_baru
               WHERE l.id_pendaftaran = p.id_pendaftaran AND ls.status = 'Diterima'),
              p.updated_at
-         ) + interval '1 minute')"
+         ) + interval '12 hours')"
     };
 }
 

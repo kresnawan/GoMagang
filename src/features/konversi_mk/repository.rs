@@ -88,8 +88,8 @@ pub async fn find_pemilik(db: &PgPool, id_pendaftaran: i32) -> Result<Option<i32
         .await
 }
 
-/// The SELECT shared by the penyetaraan queries, as a literal so that it can be joined with
-/// `concat!`.
+/// Bagian `SELECT` yang dipakai bersama oleh query penyetaraan, ditulis sebagai literal agar bisa
+/// digabung dengan `concat!`.
 macro_rules! select_penyetaraan {
     () => {
         "SELECT py.id_penyetaraan, py.id_pendaftaran,

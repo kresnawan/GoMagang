@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod health;
 mod konversi_mk;
 mod mahasiswa;
 mod panitia_magang;

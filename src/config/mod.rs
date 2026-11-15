@@ -22,21 +22,22 @@ pub struct Config {
     pub admin_secret: Option<String>,
     pub cookie_secure: bool,
     pub upload_dir: PathBuf,
-    /// Base64 of the 32-byte Ed25519 seed that signs surat keterangan. Without it, surat
-    /// keterangan cannot be issued or verified.
+    /// Seed Ed25519 32 byte dalam base64 untuk menandatangani surat keterangan. Tanpa nilai ini,
+    /// surat keterangan tidak bisa diterbitkan maupun diverifikasi.
     pub surat_signing_key: Option<String>,
-    /// Without it, no email is sent, e.g. the notice to a mahasiswa when their status changes.
+    /// Tanpa nilai ini, tidak ada email yang dikirim, misalnya pemberitahuan ke mahasiswa saat
+    /// status pendaftarannya berubah.
     pub smtp: Option<SmtpConfig>,
 }
 
-/// How the SMTP server is reached.
+/// Cara menghubungi server SMTP.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SmtpTls {
-    /// Plain connection upgraded with STARTTLS, usually on port 587.
+    /// Koneksi biasa yang di-upgrade dengan STARTTLS, umumnya di port 587.
     Starttls,
-    /// TLS from the start, usually on port 465.
+    /// TLS sejak awal koneksi, umumnya di port 465.
     Tls,
-    /// No encryption, only for a local test server such as Mailpit.
+    /// Tanpa enkripsi, hanya untuk server uji lokal seperti Mailpit.
     None,
 }
 
@@ -46,7 +47,7 @@ pub struct SmtpConfig {
     pub tls: SmtpTls,
     pub username: Option<String>,
     pub password: Option<String>,
-    /// The sender, e.g. `Panitia Magang <magang@example.com>`.
+    /// Alamat pengirim, misalnya `Panitia Magang <magang@example.com>`.
     pub from: String,
 }
 

@@ -1,4 +1,5 @@
-//! Exports the pendaftaran Panitia Magang picked to a file. Excel (.xlsx) is the only format for now.
+//! Mengekspor pendaftaran pilihan Panitia Magang ke sebuah berkas. Untuk saat ini format yang
+//! tersedia hanya Excel (.xlsx).
 
 use rust_xlsxwriter::{Color, ExcelDateTime, Format, FormatAlign, Url, Workbook, XlsxError};
 use serde::Deserialize;
@@ -8,7 +9,8 @@ use time::{OffsetDateTime, macros::format_description, macros::offset};
 use super::model::rapikan_id_pendaftaran;
 use crate::error::AppError;
 
-/// Enough for every pendaftaran of a period, while keeping one request from building a huge file.
+/// Cukup untuk semua pendaftaran dalam satu periode, sekaligus mencegah satu request membangun
+/// berkas yang sangat besar.
 pub const MAX_EKSPOR: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -57,7 +59,7 @@ impl Ekspor {
     }
 }
 
-/// One row of the file. The times are in WIB, as written in the database.
+/// Satu baris di berkas ekspor. Waktunya dalam WIB, sesuai yang tersimpan di database.
 #[derive(Debug, FromRow)]
 pub struct BarisEkspor {
     pub id_pendaftaran: i32,
@@ -89,12 +91,12 @@ pub struct BarisEkspor {
     pub nama_dpm: Option<String>,
     pub kontak_dpm: Option<String>,
     pub nomor_surat: Option<String>,
-    /// Filled in by `lampirkan_berkas`, in the order the files were uploaded.
+    /// Diisi oleh `lampirkan_berkas`, sesuai urutan berkas diunggah.
     #[sqlx(skip)]
     pub berkas: Vec<TautanEkspor>,
 }
 
-/// A public link to one file of a pendaftaran.
+/// Tautan publik ke satu berkas pendaftaran.
 #[derive(Debug, Default)]
 pub struct TautanEkspor {
     pub jenis: String,
@@ -108,7 +110,7 @@ pub struct BerkasEkspor {
     pub jenis_berkas: String,
 }
 
-/// What the Keterangan sheet tells the reader, such as how long the links work.
+/// Informasi untuk pembaca di lembar Keterangan, misalnya sampai kapan tautan berkas berlaku.
 pub struct InfoEkspor {
     pub diekspor: OffsetDateTime,
     pub tautan_berlaku_sampai: OffsetDateTime,
@@ -261,12 +263,12 @@ fn waktu_wib(waktu: OffsetDateTime) -> String {
     )
 }
 
-/// One column of links for a kind of file, or for the n-th file of a kind that a pendaftaran can
-/// have several of, such as the extra files.
+/// Satu kolom tautan untuk sebuah jenis berkas, atau untuk berkas ke-n dari jenis yang bisa
+/// dimiliki lebih dari satu oleh sebuah pendaftaran, misalnya berkas tambahan.
 #[derive(Debug, PartialEq)]
 struct KolomBerkas<'a> {
     jenis: &'a str,
-    /// 1 for the first file of this kind in a row, 2 for the second, and so on.
+    /// 1 untuk berkas pertama jenis ini dalam satu baris, 2 untuk yang kedua, dan seterusnya.
     ke: usize,
 }
 

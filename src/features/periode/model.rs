@@ -41,7 +41,7 @@ pub struct Periode {
     pub status: String,
 }
 
-/// What became of a request to start a period right away.
+/// Hasil permintaan memulai periode saat itu juga.
 #[derive(Debug, PartialEq)]
 pub enum StartResult {
     Started,
@@ -58,7 +58,7 @@ pub struct StartCheck {
     pub beririsan: bool,
 }
 
-/// What became of a request to stop a period right away.
+/// Hasil permintaan menghentikan periode saat itu juga.
 #[derive(Debug, PartialEq)]
 pub enum StopResult {
     Stopped,

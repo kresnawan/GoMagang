@@ -74,7 +74,7 @@ struct MockGoogle {
     router: Router,
 }
 
-/// Serves `/token` on a local port. Only the code `good-code` is accepted.
+/// Menjalankan `/token` tiruan di port lokal. Hanya code `good-code` yang diterima.
 async fn app_with_google(db: PgPool, claims: Value) -> MockGoogle {
     let calls = Arc::new(AtomicUsize::new(0));
     let counter = calls.clone();
@@ -114,7 +114,7 @@ async fn app_with_google(db: PgPool, claims: Value) -> MockGoogle {
     }
 }
 
-/// For routes that never touch the database: the pool doesn't connect until it's used.
+/// Untuk route yang tidak pernah menyentuh database: pool baru terhubung saat benar-benar dipakai.
 fn app_without_db(config: &Config) -> Router {
     let db = PgPoolOptions::new()
         .connect_lazy("postgres://localhost/unused")
@@ -144,7 +144,7 @@ fn set_cookie<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .find(|value| value.starts_with(&format!("{name}=")))
 }
 
-/// The `name=value` part of a `Set-Cookie` header, which is what the browser sends back.
+/// Bagian `name=value` dari header `Set-Cookie`, yaitu bagian yang dikirim balik oleh browser.
 fn cookie_pair(set_cookie: &str) -> String {
     set_cookie.split(';').next().unwrap().to_string()
 }
@@ -172,7 +172,7 @@ fn token_hash(refresh_cookie: &str) -> Vec<u8> {
     hash_token(refresh_cookie.trim_start_matches("refresh_token="))
 }
 
-/// Logs in through the callback and returns the app with the issued cookies.
+/// Login lewat callback, lalu mengembalikan app beserta cookie yang diterbitkan.
 async fn login(db: PgPool) -> (Router, String, String) {
     let mock = app_with_google(db, id_token_claims()).await;
     let response = send(mock.router.clone(), "GET", CALLBACK, Some(STATE_COOKIE)).await;
@@ -191,7 +191,7 @@ async fn token_count(db: &PgPool) -> i64 {
         .unwrap()
 }
 
-/// Moves the rotation of a token into the past, as if the grace period had passed.
+/// Memundurkan waktu rotasi sebuah token, seolah-olah masa tenggangnya sudah lewat.
 async fn age_rotation(db: &PgPool, refresh_cookie: &str, seconds: f64) {
     sqlx::query(
         "UPDATE token_refresh SET rotated_at = now() - make_interval(secs => $2)

@@ -8,7 +8,7 @@ use crate::error::AppError;
 const MAX_NAMA_LEN: usize = 255;
 const SKS_RANGE: RangeInclusive<i32> = 1..=24;
 
-/// A mata kuliah in the konversi catalog. `deleted_at` is set once it has been hidden.
+/// Satu mata kuliah di katalog konversi. `deleted_at` terisi setelah mata kuliah disembunyikan.
 #[derive(Debug, Serialize, FromRow)]
 pub struct MataKuliah {
     pub id_mk_konversi: i32,
@@ -66,8 +66,8 @@ impl MataKuliahBaru {
     }
 }
 
-/// A mata kuliah chosen for a pendaftaran, with the mata kuliah as it is now. The mata kuliah may
-/// have been hidden since it was chosen.
+/// Mata kuliah yang dipilih untuk sebuah pendaftaran, beserta data mata kuliahnya saat ini. Mata
+/// kuliah itu mungkin sudah disembunyikan setelah dipilih.
 #[derive(Debug, Serialize, FromRow)]
 pub struct Penyetaraan {
     pub id_penyetaraan: i32,
@@ -83,7 +83,7 @@ pub struct PenyetaraanBaru {
     pub id_mk_konversi: i32,
 }
 
-/// What became of a request to choose a mata kuliah.
+/// Hasil permintaan memilih mata kuliah.
 #[derive(Debug)]
 pub enum TambahResult {
     Ditambahkan(Penyetaraan),
@@ -94,7 +94,7 @@ pub enum TambahResult {
     SudahAda,
 }
 
-/// What became of a request to drop a chosen mata kuliah.
+/// Hasil permintaan membatalkan pilihan mata kuliah.
 #[derive(Debug)]
 pub enum HapusResult {
     Dihapus,

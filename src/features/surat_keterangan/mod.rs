@@ -1,6 +1,6 @@
-//! Surat keterangan kepesertaan magang: generated from a template on the first download of an
-//! Aktif pendaftaran, signed with Ed25519, and verifiable by anyone through its QR code or by
-//! uploading the PDF.
+//! Surat keterangan kepesertaan magang: dibuat dari templat saat pendaftaran `Aktif` pertama kali
+//! diunduh suratnya, ditandatangani dengan Ed25519, dan bisa diverifikasi siapa pun lewat QR
+//! code-nya atau dengan mengunggah PDF-nya.
 
 mod dokumen;
 mod handler;

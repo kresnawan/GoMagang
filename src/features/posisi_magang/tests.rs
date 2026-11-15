@@ -70,7 +70,7 @@ fn cookie_for(state: &AppState, user: &User) -> String {
     format!("{}={}", cookie.name(), cookie.value())
 }
 
-/// `start` and `end` are intervals relative to the current time in Jakarta.
+/// `start` dan `end` adalah interval relatif terhadap waktu sekarang di Jakarta.
 async fn insert_periode(db: &PgPool, start: &str, end: &str) -> i32 {
     sqlx::query_scalar(
         "INSERT INTO periode_pendaftaran (waktu_mulai, waktu_tutup)
@@ -128,7 +128,7 @@ async fn get(app: &Router, uri: &str, cookie: Option<&str>) -> Response<Body> {
         .unwrap()
 }
 
-/// The names of the positions in a successful response, in order.
+/// Nama-nama posisi di respons yang berhasil, sesuai urutan.
 async fn names(app: &Router, uri: &str, cookie: &str) -> Vec<String> {
     let response = get(app, uri, Some(cookie)).await;
     assert_eq!(response.status(), StatusCode::OK, "{uri}");
@@ -639,7 +639,7 @@ async fn sembunyikan(app: &Router, cookie: Option<&str>, id: i32) -> Response<Bo
     send(app, "DELETE", &format!("{URI}/{id}"), cookie, None).await
 }
 
-/// One running position of PT Satu, with the cookies of a mahasiswa and of Panitia Magang.
+/// Satu posisi PT Satu yang sedang berjalan, beserta cookie seorang mahasiswa dan Panitia Magang.
 struct Katalog {
     app: Router,
     db: PgPool,

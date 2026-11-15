@@ -105,19 +105,23 @@ impl GoogleClient {
             .send()
             .await
             .map_err(|err| {
-                eprintln!("failed to reach Google token endpoint: {err}");
+                tracing::error!(error = %err, "failed to reach Google token endpoint");
                 AppError::ServiceUnavailable
             })?;
 
         let status = response.status();
         if !status.is_success() {
             let body = response.text().await.unwrap_or_default();
-            eprintln!("Google rejected the authorization code: {status} {body}");
+            tracing::warn!(
+                status = status.as_u16(),
+                body,
+                "Google rejected the authorization code"
+            );
             return Err(AppError::Unauthorized);
         }
 
         let token: GoogleTokenResponse = response.json().await.map_err(|err| {
-            eprintln!("invalid response from Google token endpoint: {err}");
+            tracing::error!(error = %err, "invalid response from Google token endpoint");
             AppError::ServiceUnavailable
         })?;
 

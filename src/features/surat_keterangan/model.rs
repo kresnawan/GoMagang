@@ -1,20 +1,22 @@
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-/// Bumped when the printed fields change, so an old surat still reads as what it was.
+/// Dinaikkan setiap kali field yang dicetak berubah, sehingga surat lama tetap terbaca sesuai
+/// versinya.
 pub const VERSI_ISI: u8 = 1;
 
-/// Largest PDF accepted for verification. An issued surat is a few kilobytes.
+/// Ukuran PDF terbesar yang diterima untuk verifikasi. Surat yang diterbitkan hanya beberapa
+/// kilobyte.
 pub const MAX_BERKAS_VERIFIKASI: usize = 2 * 1024 * 1024;
 
-/// Everything printed on the surat, frozen when it is issued. It is serialised to JSON once, and
-/// that exact text is stored and signed, so later changes to the mahasiswa, the position or the
-/// template leave an issued surat as it was.
+/// Semua yang dicetak di surat, dibekukan saat surat terbit. Isi ini diubah ke JSON sekali, dan
+/// teks persis itulah yang disimpan dan ditandatangani, sehingga perubahan data mahasiswa, posisi,
+/// atau templat setelahnya tidak mengubah surat yang sudah terbit.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct IsiSurat {
     pub versi: u8,
     pub nomor_surat: String,
-    /// YYYY-MM-DD, in WIB
+    /// `YYYY-MM-DD`, dalam WIB
     pub tanggal_surat: String,
     pub nama: String,
     pub nim: String,
@@ -32,7 +34,7 @@ pub struct IsiSurat {
     pub jabatan_pejabat: String,
 }
 
-/// What the surat needs from a pendaftaran and who it belongs to.
+/// Data pendaftaran yang dibutuhkan surat, beserta pemiliknya.
 #[derive(Debug, FromRow)]
 pub struct DataPendaftaran {
     pub id_pengguna: i32,

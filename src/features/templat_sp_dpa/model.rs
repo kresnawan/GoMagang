@@ -4,10 +4,10 @@ use sqlx::FromRow;
 
 use crate::error::AppError;
 
-/// The length of the tautan_templat column.
+/// Panjang kolom `tautan_templat`.
 const MAX_TAUTAN_LEN: usize = 255;
 
-/// The template of the surat pernyataan DPA that is in use.
+/// Templat surat pernyataan DPA yang sedang berlaku.
 #[derive(Debug, Serialize, FromRow)]
 pub struct TemplatSpDpa {
     pub id_templat: i32,

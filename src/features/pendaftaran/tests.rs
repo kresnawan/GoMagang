@@ -116,7 +116,7 @@ fn cookie_for(state: &AppState, user: &User) -> String {
 }
 
 impl Ctx {
-    /// A mahasiswa whose data diri is complete.
+    /// Mahasiswa dengan data diri lengkap.
     async fn mahasiswa(&self, email: &str) -> (User, String) {
         let user = insert_pengguna(&self.db, email).await;
         sqlx::query(
@@ -142,8 +142,9 @@ impl Ctx {
         cookie_for(&self.state, &user)
     }
 
-    /// A position with this quota, in a period from `mulai` to `tutup` relative to now in WIB.
-    /// Periods may overlap here, as the rule against it belongs to POST /periode.
+    /// Posisi dengan kuota ini, di periode dari `mulai` sampai `tutup` relatif terhadap waktu
+    /// sekarang dalam WIB. Periode boleh beririsan di sini, karena aturan itu milik `POST
+    /// /periode`.
     async fn posisi(&self, kuota: i32, mulai: &str, tutup: &str) -> i32 {
         let id_perusahaan: i32 = sqlx::query_scalar(
             "INSERT INTO perusahaan_mitra (nama_perusahaan) VALUES ('PT Satu')
@@ -181,7 +182,7 @@ impl Ctx {
         self.posisi(kuota, "-1 day", "1 day").await
     }
 
-    /// Another position in the same period as `id_posisi`.
+    /// Posisi lain di periode yang sama dengan `id_posisi`.
     async fn posisi_seperiode(&self, id_posisi: i32) -> i32 {
         sqlx::query_scalar(
             "INSERT INTO posisi_magang
@@ -323,7 +324,7 @@ async fn assert_rejected(response: Response<Body>, status: StatusCode, message: 
     assert_eq!(json_body(response).await["message"], message);
 }
 
-/// Registers and returns the id of the pendaftaran and of its first file.
+/// Mendaftar, lalu mengembalikan id pendaftaran dan id berkas pertamanya.
 async fn daftar_ok(ctx: &Ctx, cookie: &str, id_posisi: i32) -> (i64, String) {
     let response = ctx.daftar(cookie, id_posisi).await;
     assert_eq!(response.status(), StatusCode::CREATED);
@@ -1328,7 +1329,7 @@ impl Ctx {
         self.email.lock().unwrap().clone()
     }
 
-    /// The status, the updated_at and the number of log rows, to check that nothing changed.
+    /// Status, `updated_at`, dan jumlah baris log, untuk memastikan tidak ada yang berubah.
     async fn snapshot(&self, id: i64) -> (String, String, i64) {
         sqlx::query_as(
             "SELECT s.status, p.updated_at::text,
@@ -1716,7 +1717,7 @@ const BUKAN_DITERIMA: &str = "Hanya pendaftaran berstatus Diterima yang bisa dik
 const BATAL: &str = "Batal/Mengundurkan Diri";
 
 impl Ctx {
-    /// Registers at a new position and moves the pendaftaran straight to this status.
+    /// Mendaftar ke posisi baru, lalu langsung memindahkan pendaftarannya ke status ini.
     async fn pendaftaran(&self, cookie: &str, status: &str) -> i64 {
         let id_posisi = self.posisi_berjalan(5).await;
         let (id, _) = daftar_ok(self, cookie, id_posisi).await;
@@ -1728,7 +1729,7 @@ impl Ctx {
         self.snapshot(id).await.0
     }
 
-    /// The (status_lama, status_baru, id_pengubah) of the last log row.
+    /// `(status_lama, status_baru, id_pengubah)` dari baris log terakhir.
     async fn last_log(&self, id: i64) -> (Option<String>, String, Option<i32>) {
         sqlx::query_as(
             "SELECT lama.status, baru.status, l.id_pengubah
@@ -1750,7 +1751,7 @@ const KEDALUWARSA: &str =
     "Batas waktu konfirmasi 1 x 12 jam sudah lewat, sehingga pendaftaran ini dibatalkan.";
 
 impl Ctx {
-    /// A pendaftaran that Panitia Magang has just moved to Diterima.
+    /// Pendaftaran yang baru saja diubah Panitia Magang menjadi `Diterima`.
     async fn diterima(&self, cookie: &str, panitia_magang: &str) -> i64 {
         let id = self.pendaftaran(cookie, "Lolos Seleksi Administrasi").await;
         let response = ubah_status(&self.app, panitia_magang, id, "Diterima").await;
@@ -1758,7 +1759,8 @@ impl Ctx {
         id
     }
 
-    /// Moves every time of this pendaftaran back, as if it became Diterima that long ago.
+    /// Memundurkan semua waktu pendaftaran ini, seolah-olah statusnya menjadi `Diterima` selama itu
+    /// yang lalu.
     async fn mundurkan(&self, id: i64, selang: &str) {
         sqlx::query(
             "WITH log AS (
@@ -2288,7 +2290,8 @@ fn jadwal_body(ids: &[i64]) -> Value {
 }
 
 impl Ctx {
-    /// A pendaftaran of a new mahasiswa, as each mahasiswa can only have two running at a time.
+    /// Pendaftaran milik mahasiswa baru, karena setiap mahasiswa hanya boleh punya dua pendaftaran
+    /// berjalan.
     async fn pendaftaran_baru(&self, nama: &str, status: &str) -> (i64, String) {
         let (_, cookie) = self.mahasiswa(&format!("{nama}@student.ub.ac.id")).await;
         let id = self.pendaftaran(&cookie, status).await;
@@ -2307,7 +2310,7 @@ impl Ctx {
         .unwrap()
     }
 
-    /// A date in WIB, this many days from today.
+    /// Tanggal dalam WIB, sekian hari dari hari ini.
     async fn tanggal(&self, days: i32) -> String {
         sqlx::query_scalar(
             "SELECT to_char(
@@ -2648,7 +2651,7 @@ async fn a_status_change_racing_a_save_cannot_leave_a_jadwal_on_a_rejected_one(d
     }
 }
 
-/// The (ada_jadwal_seleksi, ada_plotting_dpm) of each pendaftaran in the list, by id.
+/// `(ada_jadwal_seleksi, ada_plotting_dpm)` setiap pendaftaran di daftar, berdasarkan id.
 async fn flags_in_list(ctx: &Ctx, cookie: &str, id: i64) -> (Value, Value) {
     let list = json_body(get(&ctx.app, Some(cookie), URI).await).await;
     let item = list["data"]
@@ -2758,7 +2761,7 @@ async fn the_detail_does_not_repeat_the_flags(db: PgPool) {
     assert!(detail["plotting_dpm"].is_null());
 }
 
-/// Waits until a query of the app is stuck behind a row lock that the test holds.
+/// Menunggu sampai ada query aplikasi yang tertahan oleh kunci baris yang dipegang test.
 async fn wait_until_blocked(db: &PgPool) {
     for _ in 0..500 {
         let blocked: i64 = sqlx::query_scalar(
@@ -2778,8 +2781,8 @@ async fn wait_until_blocked(db: &PgPool) {
 }
 
 impl Ctx {
-    /// Runs the request while another transaction is moving this pendaftaran to `status`, and
-    /// commits that transaction once the request is waiting for it.
+    /// Menjalankan request selagi transaksi lain sedang memindahkan pendaftaran ini ke `status`,
+    /// lalu meng-commit transaksi itu begitu request sedang menunggunya.
     async fn while_status_changes_to(
         &self,
         id: i64,
@@ -2896,7 +2899,8 @@ async fn accepting_leaves_a_pendaftaran_that_ended_while_it_waited(db: PgPool) {
 }
 
 impl Ctx {
-    /// `jumlah` pendaftaran of new mahasiswa, oldest first, with clearly different times.
+    /// Sebanyak `jumlah` pendaftaran milik mahasiswa baru, dari yang paling lama, dengan waktu yang
+    /// jelas berbeda.
     async fn banyak_pendaftaran(&self, jumlah: i32) -> Vec<i64> {
         let mut created = Vec::new();
         for i in 0..jumlah {
@@ -3109,7 +3113,7 @@ async fn paging_needs_a_login_and_a_role(db: PgPool) {
     );
 }
 
-/// Three positions: A and B share a period, A and C share a company.
+/// Tiga posisi: A dan B satu periode, A dan C satu perusahaan.
 struct PosisiFilter {
     a: i32,
     b: i32,
@@ -3174,7 +3178,7 @@ impl Ctx {
             .unwrap()
     }
 
-    /// A pendaftaran of a new mahasiswa at this position, in this status.
+    /// Pendaftaran milik mahasiswa baru di posisi ini, dengan status ini.
     async fn pendaftaran_di(&self, nama: &str, id_posisi: i32, status: &str) -> i64 {
         let (_, cookie) = self.mahasiswa(&format!("{nama}@student.ub.ac.id")).await;
         let (id, _) = daftar_ok(self, &cookie, id_posisi).await;
@@ -3862,11 +3866,11 @@ async fn post_ekspor(app: &Router, cookie: Option<&str>, body: Value) -> Respons
         .unwrap()
 }
 
-/// The parts of an .xlsx file that the tests look at.
+/// Bagian berkas .xlsx yang diperiksa oleh test.
 struct Xlsx {
     sheet: String,
     strings: String,
-    /// The targets of the links in the first sheet, in the order they were written.
+    /// Tujuan tautan di lembar pertama, sesuai urutan ditulis.
     links: Vec<String>,
 }
 
@@ -3898,7 +3902,7 @@ fn baca_xlsx(isi: &[u8]) -> Xlsx {
     }
 }
 
-/// The token of a public link, as made by an export.
+/// Token dari tautan publik yang dibuat oleh ekspor.
 fn token_of(link: &str) -> &str {
     link.strip_prefix("http://frontend.test/berkas/")
         .unwrap_or_else(|| panic!("{link}"))

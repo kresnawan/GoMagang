@@ -19,13 +19,15 @@ use crate::{
 };
 
 const MAX_BERKAS_SIZE: usize = 2 * 1024 * 1024;
-/// Room for two full files and the multipart framing around them. A file that alone goes over
-/// `MAX_BERKAS_SIZE` but fits in here still gets the per-file check.
+/// Ruang untuk semua berkas berukuran penuh beserta pembungkus multipart-nya. Berkas yang sendirian
+/// melebihi `MAX_BERKAS_SIZE` tetapi masih muat di sini tetap ditolak oleh pemeriksaan per berkas.
 pub const MAX_BODY_SIZE: usize = (2 + MAX_BERKAS_TAMBAHAN) * MAX_BERKAS_SIZE + 64 * 1024;
-/// Portfolio and other extra files a mahasiswa may add, on top of the two required ones.
+/// Jumlah maksimal berkas tambahan (portfolio dan lainnya) yang boleh ditambahkan mahasiswa, di
+/// luar dua berkas wajib.
 pub const MAX_BERKAS_TAMBAHAN: usize = 5;
 pub const JENIS_BERKAS_TAMBAHAN: &str = "Portfolio dan Berkas Tambahan";
-/// How many times a mahasiswa may register in one period, whatever happened to those registrations.
+/// Berapa kali seorang mahasiswa boleh mendaftar dalam satu periode, apa pun nasib
+/// pendaftaran-pendaftaran tersebut.
 pub const MAX_PENDAFTARAN_PER_PERIODE: i64 = 2;
 const DEFAULT_ROWS: i32 = 25;
 
@@ -108,7 +110,7 @@ pub fn panitia_magang_can_change(lama: &str, baru: &str) -> bool {
     )
 }
 
-/// What became of a request to change a status.
+/// Hasil permintaan mengubah status.
 #[derive(Debug, PartialEq)]
 pub enum UpdateStatusResult {
     Updated { status_lama: String },
@@ -116,7 +118,7 @@ pub enum UpdateStatusResult {
     NotAllowed,
 }
 
-/// What became of a mahasiswa's request to accept a place.
+/// Hasil permintaan mahasiswa untuk mengonfirmasi penerimaan.
 #[derive(Debug, PartialEq)]
 pub enum AcceptResult {
     Accepted,
@@ -124,11 +126,12 @@ pub enum AcceptResult {
     NotOwner,
     NotDiterima,
     HasAktif,
-    /// The 12 hours to confirm have passed.
+    /// Tenggat konfirmasi 12 jam sudah lewat.
     Kedaluwarsa,
 }
 
-/// One jadwal for every pendaftaran listed. The response sends back the same fields, as saved.
+/// Satu jadwal untuk semua pendaftaran yang disebut. Respons mengirim balik field yang sama, sesuai
+/// yang tersimpan.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SimpanJadwal {
@@ -168,7 +171,8 @@ impl SimpanJadwal {
     }
 }
 
-/// One DPM for every pendaftaran listed. The response sends back the same fields, as saved.
+/// Satu DPM untuk semua pendaftaran yang disebut. Respons mengirim balik field yang sama, sesuai
+/// yang tersimpan.
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SimpanPlotting {
@@ -218,7 +222,7 @@ pub(super) fn rapikan_id_pendaftaran(id_pendaftaran: &mut Vec<i32>) -> Result<()
     Ok(())
 }
 
-/// What became of a request to save the data of a stage, such as a jadwal or a plotting.
+/// Hasil permintaan menyimpan data sebuah tahap, misalnya jadwal seleksi atau plotting DPM.
 #[derive(Debug, PartialEq)]
 pub enum SimpanTahapResult {
     Saved,
@@ -238,7 +242,7 @@ pub struct ListQuery {
     pub s: Option<String>,
 }
 
-/// Which part of the list to send.
+/// Bagian daftar yang dikirim: nomor halaman dan jumlah baris per halaman.
 #[derive(Debug, Clone, Copy)]
 pub struct Halaman {
     pub page: i32,
@@ -258,7 +262,7 @@ impl Halaman {
     }
 }
 
-/// Which pendaftaran to look at. What is left empty does not narrow them down.
+/// Pendaftaran mana yang dilihat. Field yang kosong tidak mempersempit hasil.
 #[derive(Debug, Default)]
 pub struct FilterPendaftaran {
     pub id_pengguna: Option<i32>,
@@ -338,7 +342,7 @@ impl DaftarPendaftaran {
     }
 }
 
-/// What both the list and the detail say about a pendaftaran itself.
+/// Data pendaftaran yang sama-sama ditampilkan di daftar dan di detail.
 #[derive(Debug, Serialize, FromRow)]
 pub struct InfoPendaftaran {
     pub id_pendaftaran: i32,
@@ -350,8 +354,8 @@ pub struct InfoPendaftaran {
     pub id_periode: i32,
     #[sqlx(flatten)]
     pub perusahaan: Perusahaan,
-    /// While the status is Diterima: until when the mahasiswa may confirm, 12 hours after it was
-    /// set. Past it the pendaftaran is cancelled. None in any other status.
+    /// Selama status `Diterima`: batas waktu mahasiswa mengonfirmasi, yaitu 12 jam setelah status
+    /// itu diberikan. Lewat dari itu, pendaftaran dibatalkan. `None` pada status lain.
     pub batas_konfirmasi: Option<String>,
 }
 
@@ -427,9 +431,9 @@ pub struct PosisiTujuan {
 
 #[derive(Debug, FromRow)]
 pub struct JumlahPendaftaran {
-    /// Every registration in the target position's period, in any status.
+    /// Semua pendaftaran di periode posisi tujuan, dalam status apa pun.
     pub di_periode: i64,
-    /// Registrations for the target position that have not reached a final status.
+    /// Pendaftaran di posisi tujuan yang belum berstatus akhir.
     pub berjalan_di_posisi: i64,
     pub aktif: i64,
 }
@@ -442,7 +446,7 @@ pub struct LokasiBerkas {
     pub nim: Option<String>,
 }
 
-/// A file about to be saved.
+/// Berkas yang akan disimpan.
 #[derive(Debug)]
 pub struct BerkasBaru {
     pub jenis: &'static str,

@@ -262,11 +262,11 @@ pub async fn ekspor(
     let isi = tokio::task::spawn_blocking(move || ekspor::buat_xlsx(&baris, &info))
         .await
         .map_err(|err| {
-            eprintln!("export task failed: {err}");
+            tracing::error!(error = %err, "export task failed");
             AppError::Internal
         })?
         .map_err(|err| {
-            eprintln!("failed to build export: {err}");
+            tracing::error!(error = %err, "failed to build export");
             AppError::Internal
         })?;
 
@@ -401,7 +401,7 @@ pub async fn create(
     storage::save(&state.upload_dir, &berkas)
         .await
         .map_err(|err| {
-            eprintln!("failed to save berkas: {err}");
+            tracing::error!(error = %err, "failed to save berkas");
             AppError::Internal
         })?;
 
@@ -511,7 +511,7 @@ async fn baca_berkas(
     fs::read(state.upload_dir.join(&berkas.nama_berkas))
         .await
         .map_err(|err| {
-            eprintln!("failed to read berkas {id_berkas}: {err}");
+            tracing::error!(error = %err, id_berkas, "failed to read berkas");
             match err.kind() {
                 io::ErrorKind::NotFound => AppError::NotFound,
                 _ => AppError::Internal,

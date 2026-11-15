@@ -70,7 +70,7 @@ async fn panitia_magang_cookie(db: &PgPool, state: &AppState) -> String {
     cookie_for(state, &user)
 }
 
-/// `start` and `end` are intervals relative to the current time in Jakarta.
+/// `start` dan `end` adalah interval relatif terhadap waktu sekarang di Jakarta.
 async fn insert_periode(db: &PgPool, start: &str, end: &str) -> i32 {
     sqlx::query_scalar(
         "INSERT INTO periode_pendaftaran (waktu_mulai, waktu_tutup)
@@ -527,7 +527,7 @@ async fn start_periode(app: &Router, cookie: Option<&str>, id: &str) -> Response
         .unwrap()
 }
 
-/// The saved times, to check that a rejected request changed nothing.
+/// Waktu yang tersimpan, untuk memastikan request yang ditolak tidak mengubah apa pun.
 async fn saved_times(db: &PgPool, id: i32) -> (String, String) {
     sqlx::query_as(
         "SELECT waktu_mulai::text, waktu_tutup::text
