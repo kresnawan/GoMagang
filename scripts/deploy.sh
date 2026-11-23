@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
-# Membangun image backend GoMagang di laptop (Docker) lalu men-deploy-nya ke VPS (Podman rootless
-# + Quadlet/systemd) lewat SSH.
+# Membangun image backend GoMagang di laptop (Docker) lalu men-deploy-nya ke VPS sebagai container
+# Podman rootless lewat SSH.
 #
 # Alur:
 #   1. Koneksi    : satu koneksi SSH dipakai bersama (passphrase kunci hanya ditanya sekali).
-#   2. Preflight  : VPS diperiksa lebih dulu (Podman, systemd user, .env.production,
-#                   container/network Postgres, role dan database) sebelum build yang lama dimulai.
+#   2. Preflight  : VPS diperiksa lebih dulu (Podman, .env.production, container/network Postgres,
+#                   role dan database) sebelum build yang lama dimulai.
 #   3. Persiapan  : bila perlu dan disetujui, backend dan Postgres disambungkan ke satu network,
-#                   role dan database dibuat dari DATABASE_URL, dan linger dinyalakan.
+#                   serta role dan database dibuat dari DATABASE_URL di .env.production.
 #   4. Build      : scripts/build-image.sh (fmt, clippy, test, build, smoke test).
 #   5. Kirim      : docker save | gzip | ssh | podman load, dilewati bila image sudah ada di VPS.
-#   6. Jalankan   : unit Quadlet ditulis ulang dengan tag baru, systemctl --user restart, tunggu
+#   6. Jalankan   : container gomagang-backend diganti (podman run --restart unless-stopped), tunggu
 #                   GET /health 200; bila gagal, rollback otomatis ke versi sebelumnya.
 #   7. Bersihkan  : image lama di VPS dihapus, menyisakan beberapa yang terbaru.
 #
@@ -128,9 +128,8 @@ ok "terhubung"
 # ---- 2. Preflight VPS -----------------------------------------------------------------------
 step "Memeriksa VPS"
 DIR_Q="$(printf '%q' "$DEPLOY_DIR")"
-# Templat env dan unit Quadlet selalu dikirim, supaya folder deploy selalu cocok dengan commit ini.
+# Templat env selalu dikirim, supaya selalu cocok dengan commit ini.
 vps "mkdir -p $DIR_Q && cat > $DIR_Q/.env.production.example" <"$ROOT/scripts/env.production.example"
-vps "cat > $DIR_Q/gomagang-backend.container.in" <"$ROOT/scripts/gomagang-backend.container"
 
 declare -A PF=()
 PREFLIGHT="$(remote preflight "$DEPLOY_DIR" "$PG_CONTAINER" "$PG_NETWORK" "$GOMAGANG_BIND")" \
@@ -168,18 +167,6 @@ if [[ "${PF[DB_ROLE_EXISTS]}" != 1 || "${PF[DB_EXISTS]}" != 1 ]]; then
     ok "role dan database siap"
 fi
 
-if [[ "${PF[LINGER]}" != yes ]]; then
-    step "Linger"
-    echo "Linger untuk user di VPS belum menyala. Tanpa linger, service systemd user (termasuk backend)"
-    echo "berhenti saat semua sesi SSH ditutup dan tidak jalan lagi setelah reboot."
-    if confirm "Nyalakan linger (loginctl enable-linger)?"; then
-        remote enable-linger && ok "linger menyala" \
-            || warn "Linger belum menyala. Backend tetap di-deploy, tapi bisa berhenti setelah logout atau reboot."
-    else
-        warn "Linger dilewati. Backend bisa berhenti setelah logout atau reboot."
-    fi
-fi
-
 # ---- 4. Build -------------------------------------------------------------------------------
 if [[ -z "$TAG" ]]; then
     [[ -z "$(git status --porcelain)" ]] \
@@ -195,7 +182,7 @@ else
 fi
 
 if [[ "$TAG" == "$CURRENT_TAG" ]]; then
-    warn "${IMAGE_NAME}:${TAG} sudah berjalan di VPS; container akan dicek ulang tanpa diganti."
+    warn "${IMAGE_NAME}:${TAG} sudah berjalan di VPS; container-nya akan dibuat ulang dengan versi yang sama."
 fi
 
 echo
@@ -240,5 +227,5 @@ ELAPSED=$(( $(date +%s) - STARTED_AT ))
 step "Selesai dalam ${ELAPSED} detik"
 echo "  Versi   : ${TAG}${CURRENT_TAG:+ (sebelumnya ${CURRENT_TAG})}"
 echo "  Rollback: scripts/deploy.sh --tag ${CURRENT_TAG:-<tag>}"
-echo "  Log     : ssh ${DEPLOY_HOST} journalctl --user -u gomagang-backend -f"
-echo "  Status  : ssh ${DEPLOY_HOST} systemctl --user status gomagang-backend"
+echo "  Log     : ssh ${DEPLOY_HOST} podman logs -f gomagang-backend"
+echo "  Status  : ssh ${DEPLOY_HOST} podman ps --filter name=gomagang-backend"

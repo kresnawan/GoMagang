@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Bagian deploy yang berjalan di VPS (Podman rootless + Quadlet). Tidak dijalankan langsung, tetapi
-# dikirim oleh scripts/deploy.sh lewat SSH:  ssh host bash -s -- <perintah> [argumen...] < deploy-remote.sh
+# Bagian deploy yang berjalan di VPS (Podman rootless). Tidak dijalankan langsung, tetapi dikirim
+# oleh scripts/deploy.sh lewat SSH:  ssh host bash -s -- <perintah> [argumen...] < deploy-remote.sh
 #
 # Semua yang membaca secret (.env.production, password database) terjadi di sini, sehingga secret
 # tidak pernah keluar dari VPS. Hasil yang perlu dibaca laptop ditulis ke stdout sebagai KUNCI=nilai;
@@ -11,7 +11,6 @@
 #   preflight      DIR PG_CONTAINER PG_NETWORK BIND   Memeriksa VPS dan mencari container/network Postgres
 #   ensure-network PG_CONTAINER NETWORK               Membuat network dan menyambungkan Postgres ke sana
 #   ensure-db      DIR PG_CONTAINER                   Membuat role dan database dari DATABASE_URL
-#   enable-linger                                     Menyalakan linger agar service jalan setelah reboot
 #   has-image      TAG                                Keluar 0 bila image sudah ada
 #   up             DIR TAG PG_NETWORK BIND            Menjalankan TAG, menunggu sehat, rollback bila gagal
 #   prune          DIR KEEP                           Menghapus image lama, menyisakan KEEP terbaru
@@ -20,26 +19,14 @@ set -Eeuo pipefail
 
 IMAGE_REPO=localhost/gomagang
 CONTAINER=gomagang-backend
-SERVICE=gomagang-backend.service
-QUADLET_DIR="$HOME/.config/containers/systemd"
-QUADLET_FILE="$QUADLET_DIR/gomagang-backend.container"
-TEMPLATE_NAME=gomagang-backend.container.in
+UPLOAD_VOLUME=gomagang_uploads
 STATE_NAME=deploy-state
 HEALTH_TIMEOUT=90
-
-# Sesi SSH non-interaktif kadang tidak membawa variabel ini, padahal systemctl --user
-# membutuhkannya. Hanya diisi bila foldernya memang ada; folder yang tidak ada membuat podman gagal.
-if [[ -z "${XDG_RUNTIME_DIR:-}" && -d "/run/user/$(id -u)" ]]; then
-    export XDG_RUNTIME_DIR="/run/user/$(id -u)"
-fi
-if [[ -z "${DBUS_SESSION_BUS_ADDRESS:-}" && -S "${XDG_RUNTIME_DIR:-/nonexistent}/bus" ]]; then
-    export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
-fi
+STOP_TIMEOUT=30
 
 say() { echo "  [vps] $*" >&2; }
 die() { echo "  [vps] GAGAL: $*" >&2; exit 1; }
 out() { printf '%s=%s\n' "$1" "$2"; }
-user_systemctl() { systemctl --user "$@"; }
 
 # Folder deploy: path relatif dihitung dari home user SSH.
 resolve_dir() {
@@ -144,16 +131,6 @@ http_health() {
     ) 2>/dev/null
 }
 
-# Generator Quadlet, untuk memeriksa file .container sebelum dipasang. Lokasinya beda per distro.
-quadlet_generator() {
-    local g
-    for g in /usr/lib/systemd/system-generators/podman-system-generator \
-        /usr/libexec/podman/quadlet /usr/lib/podman/quadlet; do
-        [[ -x "$g" ]] && { printf '%s' "$g"; return 0; }
-    done
-    return 1
-}
-
 cmd_preflight() {
     local dir pg_container="$2" pg_network="$3" bind="$4" envfile key candidates hosts port arch mode
     dir="$(resolve_dir "$1")"
@@ -162,9 +139,6 @@ cmd_preflight() {
     podman info >/dev/null 2>&1 || die "podman info gagal untuk user $(id -un)."
     [[ "$(podman info -f '{{.Host.Security.Rootless}}')" == true ]] \
         || die "Script ini untuk Podman rootless, tetapi podman berjalan sebagai root."
-    user_systemctl show-environment >/dev/null 2>&1 \
-        || die "systemd user (systemctl --user) tidak bisa dihubungi. Jalankan sekali: sudo loginctl enable-linger $(id -un)"
-    quadlet_generator >/dev/null || die "Quadlet tidak ditemukan; butuh Podman 4.4 atau lebih baru."
 
     arch="$(podman info -f '{{.Host.Arch}}')"
     case "$arch" in
@@ -172,10 +146,8 @@ cmd_preflight() {
         arm64) arch=aarch64 ;;
     esac
     out ARCH "$arch"
-    out LINGER "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null || echo unknown)"
 
     mkdir -p "$dir"
-    [[ -f "$dir/$TEMPLATE_NAME" ]] || die "Templat $TEMPLATE_NAME belum terkirim ke $dir."
     envfile="$dir/.env.production"
     if [[ ! -f "$envfile" ]]; then
         die "$envfile belum ada. Salin dari $dir/.env.production.example, isi nilainya, lalu deploy ulang."
@@ -248,7 +220,7 @@ SQL
     out DB_NAME "$DB_NAME"
 
     port="$(bind_port "$bind")"
-    if ! podman ps --format '{{.Names}}' | grep -qx "$CONTAINER" \
+    if ! podman container exists "$CONTAINER" \
         && command -v ss >/dev/null && [[ -n "$(ss -Hltn "sport = :$port" 2>/dev/null)" ]]; then
         die "Port $port di VPS sudah dipakai proses lain. Pilih port lain dengan --bind."
     fi
@@ -288,41 +260,19 @@ SQL
     say "role '$DB_USER' dan database '$DB_NAME' siap"
 }
 
-cmd_enable_linger() {
-    # Untuk user sendiri, polkit biasanya mengizinkan tanpa sudo.
-    if loginctl enable-linger "$(id -un)" 2>/dev/null; then
-        say "linger dinyalakan; backend tetap berjalan setelah logout dan reboot"
-    else
-        die "Tidak boleh menyalakan linger tanpa sudo. Jalankan sekali di VPS: sudo loginctl enable-linger $(id -un)"
-    fi
-}
-
 cmd_has_image() {
     podman image exists "$IMAGE_REPO:$1"
 }
 
-# Menulis unit Quadlet untuk TAG dan memastikan generator menerimanya sebelum dipasang.
-install_quadlet() {
-    local dir="$1" tag="$2" net="$3" bind="$4" tmp generator
-    tmp="$(mktemp -d)"
-    sed -e "s|@IMAGE@|$IMAGE_REPO:$tag|" \
-        -e "s|@ENV_FILE@|$dir/.env.production|" \
-        -e "s|@NETWORK@|$net|" \
-        -e "s|@BIND@|$bind|" \
-        "$dir/$TEMPLATE_NAME" >"$tmp/gomagang-backend.container"
-    generator="$(quadlet_generator)"
-    if ! QUADLET_UNIT_DIRS="$tmp" "$generator" -user -dryrun >"$tmp/generated" 2>&1 \
-        || ! grep -q "gomagang-backend.service" "$tmp/generated"; then
-        cat "$tmp/generated" >&2
-        rm -rf "$tmp"
-        die "Quadlet menolak unit gomagang-backend.container (lihat pesan di atas)."
-    fi
-    mkdir -p "$QUADLET_DIR"
-    mv "$tmp/gomagang-backend.container" "$QUADLET_FILE"
-    rm -rf "$tmp"
-    user_systemctl daemon-reload
-    [[ "$(user_systemctl show -p LoadState --value "$SERVICE")" == loaded ]] \
-        || die "systemd tidak membuat $SERVICE dari $QUADLET_FILE."
+# Versi script sebelumnya memasang backend sebagai unit Quadlet. Bila masih ada, systemd akan
+# terus membuat ulang container-nya, jadi unit itu dicopot dulu.
+remove_old_quadlet() {
+    local unit="$HOME/.config/containers/systemd/gomagang-backend.container"
+    [[ -f "$unit" ]] || return 0
+    say "mencopot unit Quadlet lama $unit"
+    systemctl --user stop gomagang-backend.service >/dev/null 2>&1 || true
+    rm -f "$unit"
+    systemctl --user daemon-reload >/dev/null 2>&1 || true
 }
 
 write_state() {
@@ -337,48 +287,62 @@ EOF
     mv "$dir/$STATE_NAME.tmp" "$dir/$STATE_NAME"
 }
 
-# Menunggu sampai /health menjawab 200. Gagal lebih cepat bila service crash atau gagal start.
+# Mengganti container backend dengan image TAG.
+run_container() {
+    local dir="$1" tag="$2" net="$3" bind="$4"
+    if podman container exists "$CONTAINER"; then
+        # Memberi waktu server menyelesaikan request yang sedang berjalan setelah SIGTERM.
+        podman stop -t "$STOP_TIMEOUT" "$CONTAINER" >/dev/null 2>&1 || true
+        podman rm -f "$CONTAINER" >/dev/null
+    fi
+    say "menjalankan $IMAGE_REPO:$tag"
+    # :U menyamakan pemilik volume dengan user di container (UID 10001) setiap kali dijalankan.
+    # Tanpa itu, Podman bisa mengubah pemilik volume yang masih kosong mengikuti container lain
+    # yang memasangnya, dan backend tidak bisa menulis berkas unggahan.
+    podman run -d \
+        --name "$CONTAINER" \
+        --restart unless-stopped \
+        --init \
+        --env-file "$dir/.env.production" \
+        --env UPLOAD_DIR=/data/uploads \
+        --volume "$UPLOAD_VOLUME:/data/uploads:U" \
+        --network "$net" \
+        --publish "$bind:3000" \
+        --label "gomagang.tag=$tag" \
+        "$IMAGE_REPO:$tag" >/dev/null
+}
+
+# Menunggu sampai /health menjawab 200. Gagal lebih cepat bila container berhenti atau crash.
 wait_healthy() {
     local host="$1" port="$2" waited=0 state
     while (( waited < HEALTH_TIMEOUT )); do
         if http_health "$host" "$port"; then
             return 0
         fi
-        state="$(user_systemctl show -p ActiveState -p SubState --value "$SERVICE" | paste -sd ' ')"
+        state="$(podman inspect -f '{{.State.Status}} {{.RestartCount}}' "$CONTAINER" 2>/dev/null || echo "missing 0")"
         case "$state" in
-            failed*|*auto-restart*|inactive*) return 1 ;;
+            exited*|stopped*|dead*|missing*) return 1 ;;
         esac
+        (( ${state##* } == 0 )) || return 1
         sleep 2
         waited=$(( waited + 2 ))
     done
     return 1
 }
 
-start_tag() {
-    local dir="$1" tag="$2" previous="$3" net="$4" bind="$5"
-    install_quadlet "$dir" "$tag" "$net" "$bind"
-    write_state "$dir" "$tag" "$previous" "$net" "$bind"
-    say "menjalankan $IMAGE_REPO:$tag lewat $SERVICE"
-    # Gagal start ditangani wait_healthy, yang juga menampilkan log.
-    user_systemctl restart "$SERVICE" || true
-}
-
-show_logs() {
-    journalctl --user -u "$SERVICE" -n 60 --no-pager -o cat >&2 2>/dev/null \
-        || podman logs --tail 60 "$CONTAINER" >&2 2>&1 || true
-}
-
 cmd_up() {
     local dir tag="$2" net="$3" bind="$4" previous host port
     dir="$(resolve_dir "$1")"
     cmd_has_image "$tag" || die "Image $IMAGE_REPO:$tag tidak ada di VPS."
+    remove_old_quadlet
 
     previous="$(env_get "$dir/$STATE_NAME" GOMAGANG_TAG)"
     [[ "$previous" == "$tag" ]] && previous="$(env_get "$dir/$STATE_NAME" GOMAGANG_PREVIOUS_TAG)"
     host="$(bind_host "$bind")"
     port="$(bind_port "$bind")"
 
-    start_tag "$dir" "$tag" "$previous" "$net" "$bind"
+    run_container "$dir" "$tag" "$net" "$bind"
+    write_state "$dir" "$tag" "$previous" "$net" "$bind"
     if wait_healthy "$host" "$port"; then
         say "sehat: GET http://$host:$port/health menjawab 200"
         podman exec "$CONTAINER" sh -c 'test -w /data/uploads' \
@@ -388,14 +352,15 @@ cmd_up() {
     fi
 
     echo "  [vps] backend berhenti atau tidak sehat (batas ${HEALTH_TIMEOUT} detik). Log terakhir:" >&2
-    show_logs
+    podman logs --tail 60 "$CONTAINER" >&2 2>&1 || true
     if [[ -n "$previous" ]] && cmd_has_image "$previous"; then
         say "rollback ke $IMAGE_REPO:$previous"
-        start_tag "$dir" "$previous" "" "$net" "$bind"
+        run_container "$dir" "$previous" "$net" "$bind"
+        write_state "$dir" "$previous" "" "$net" "$bind"
         if wait_healthy "$host" "$port"; then
             say "rollback berhasil; versi lama $previous berjalan lagi"
         else
-            say "rollback juga tidak sehat; periksa: journalctl --user -u $SERVICE"
+            say "rollback juga tidak sehat; periksa: podman logs $CONTAINER"
         fi
     fi
     die "deploy $tag gagal"
@@ -422,7 +387,6 @@ case "$command" in
     preflight) cmd_preflight "$@" ;;
     ensure-network) cmd_ensure_network "$@" ;;
     ensure-db) cmd_ensure_db "$@" ;;
-    enable-linger) cmd_enable_linger ;;
     has-image) cmd_has_image "$@" ;;
     up) cmd_up "$@" ;;
     prune) cmd_prune "$@" ;;
