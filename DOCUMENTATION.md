@@ -1481,8 +1481,6 @@ Surat keterangan kepesertaan magang tidak diunggah Panitia Magang, tapi dibuat b
 openssl rand -base64 32
 ```
 
-Isi yang belum punya sumber data masih mockup. Daftarnya ada di [Yang masih perlu dibuat di backend](#yang-masih-perlu-dibuat-di-backend).
-
 ### `GET /api/v1/pendaftaran/{id}/surat-keterangan`
 
 Mengunduh surat keterangan sebuah pendaftaran, dan menerbitkannya pada unduhan pertama.
