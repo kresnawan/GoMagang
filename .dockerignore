@@ -7,5 +7,4 @@ target/
 .gitignore
 .dockerignore
 Dockerfile
-docker-compose.yml
 DOCUMENTATION.md

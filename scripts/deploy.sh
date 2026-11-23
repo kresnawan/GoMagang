@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 #
-# Membangun image backend GoMagang di laptop lalu men-deploy-nya ke VPS lewat SSH.
+# Membangun image backend GoMagang di laptop (Docker) lalu men-deploy-nya ke VPS (Podman rootless
+# + Quadlet/systemd) lewat SSH.
 #
 # Alur:
 #   1. Koneksi    : satu koneksi SSH dipakai bersama (passphrase kunci hanya ditanya sekali).
-#   2. Preflight  : VPS diperiksa lebih dulu (Docker, .env.production, container/network Postgres,
-#                   role dan database) sebelum build yang lama dimulai.
+#   2. Preflight  : VPS diperiksa lebih dulu (Podman, systemd user, .env.production,
+#                   container/network Postgres, role dan database) sebelum build yang lama dimulai.
 #   3. Persiapan  : bila perlu dan disetujui, backend dan Postgres disambungkan ke satu network,
-#                   serta role dan database dibuat dari DATABASE_URL di .env.production.
+#                   role dan database dibuat dari DATABASE_URL, dan linger dinyalakan.
 #   4. Build      : scripts/build-image.sh (fmt, clippy, test, build, smoke test).
-#   5. Kirim      : docker save | gzip | ssh | docker load, dilewati bila image sudah ada di VPS.
-#   6. Jalankan   : docker compose up, tunggu GET /health 200; bila gagal, rollback otomatis ke
-#                   versi sebelumnya.
+#   5. Kirim      : docker save | gzip | ssh | podman load, dilewati bila image sudah ada di VPS.
+#   6. Jalankan   : unit Quadlet ditulis ulang dengan tag baru, systemctl --user restart, tunggu
+#                   GET /health 200; bila gagal, rollback otomatis ke versi sebelumnya.
 #   7. Bersihkan  : image lama di VPS dihapus, menyisakan beberapa yang terbaru.
 #
 # Secret tidak pernah dikirim dari laptop: .env.production hanya ada di folder deploy di VPS.
@@ -21,6 +22,9 @@
 set -Eeuo pipefail
 
 IMAGE_NAME=gomagang
+# Nama lengkap di VPS. Podman menamai image tanpa registry sebagai docker.io/library/..., jadi
+# image dikirim dengan nama localhost/... supaya tidak pernah dicari di Docker Hub.
+REMOTE_IMAGE=localhost/gomagang
 KEEP_IMAGES=3
 
 DEPLOY_HOST="${DEPLOY_HOST:-kresnawan@ssh.kresnawan.com}"
@@ -42,7 +46,7 @@ Opsi:
   --host USER@HOST      Tujuan SSH (bawaan: ${DEPLOY_HOST}).
   --dir PATH            Folder deploy di VPS, relatif dari home (bawaan: ${DEPLOY_DIR}).
   --pg-container NAMA   Container PostgreSQL di VPS (bawaan: dideteksi otomatis).
-  --pg-network NAMA     Network Docker Postgres (bawaan: network buatan user milik container itu).
+  --pg-network NAMA     Network Podman Postgres (bawaan: network buatan user milik container itu).
   --bind ALAMAT:PORT    Port backend di VPS (bawaan: ${GOMAGANG_BIND}).
   --tag TAG             Deploy image gomagang:TAG yang sudah ada tanpa build, mis. untuk rollback.
   --skip-build          Pakai image commit saat ini yang sudah di-build sebelumnya.
@@ -124,9 +128,9 @@ ok "terhubung"
 # ---- 2. Preflight VPS -----------------------------------------------------------------------
 step "Memeriksa VPS"
 DIR_Q="$(printf '%q' "$DEPLOY_DIR")"
-# Templat env dan compose selalu dikirim, supaya folder deploy selalu cocok dengan commit ini.
+# Templat env dan unit Quadlet selalu dikirim, supaya folder deploy selalu cocok dengan commit ini.
 vps "mkdir -p $DIR_Q && cat > $DIR_Q/.env.production.example" <"$ROOT/scripts/env.production.example"
-vps "cat > $DIR_Q/docker-compose.yml" <"$ROOT/docker-compose.yml"
+vps "cat > $DIR_Q/gomagang-backend.container.in" <"$ROOT/scripts/gomagang-backend.container"
 
 declare -A PF=()
 PREFLIGHT="$(remote preflight "$DEPLOY_DIR" "$PG_CONTAINER" "$PG_NETWORK" "$GOMAGANG_BIND")" \
@@ -142,13 +146,13 @@ LOCAL_ARCH="$(docker info -f '{{.Architecture}}')"
 PG_CONTAINER="${PF[PG_CONTAINER]}"
 PG_NETWORK="${PF[PG_NETWORK]}"
 CURRENT_TAG="${PF[CURRENT_TAG]:-}"
-ok "Docker ${REMOTE_ARCH}, Postgres '${PG_CONTAINER}' di network '${PG_NETWORK}', folder ${PF[DEPLOY_DIR]}"
+ok "Podman rootless ${REMOTE_ARCH}, Postgres '${PG_CONTAINER}' di network '${PG_NETWORK}', folder ${PF[DEPLOY_DIR]}"
 
 # ---- 3. Persiapan network dan database ------------------------------------------------------
 if [[ "${PF[NEED_NETWORK]:-0}" == 1 ]]; then
     step "Network Postgres"
     echo "Container '${PG_CONTAINER}' belum ada di network '${PG_NETWORK}'. Network itu akan dibuat bila"
-    echo "belum ada, lalu '${PG_CONTAINER}' disambungkan ke sana (docker network connect, tanpa restart)."
+    echo "belum ada, lalu '${PG_CONTAINER}' disambungkan ke sana (podman network connect, tanpa restart)."
     confirm "Lanjutkan?" || die "Dibatalkan. Atau pilih network yang sudah ada dengan --pg-network."
     remote ensure-network "$PG_CONTAINER" "$PG_NETWORK"
     ok "network siap"
@@ -162,6 +166,18 @@ if [[ "${PF[DB_ROLE_EXISTS]}" != 1 || "${PF[DB_EXISTS]}" != 1 ]]; then
     confirm "Buat sekarang?" || die "Dibatalkan. Buat role dan database dulu, lalu deploy ulang."
     remote ensure-db "$DEPLOY_DIR" "$PG_CONTAINER"
     ok "role dan database siap"
+fi
+
+if [[ "${PF[LINGER]}" != yes ]]; then
+    step "Linger"
+    echo "Linger untuk user di VPS belum menyala. Tanpa linger, service systemd user (termasuk backend)"
+    echo "berhenti saat semua sesi SSH ditutup dan tidak jalan lagi setelah reboot."
+    if confirm "Nyalakan linger (loginctl enable-linger)?"; then
+        remote enable-linger && ok "linger menyala" \
+            || warn "Linger belum menyala. Backend tetap di-deploy, tapi bisa berhenti setelah logout atau reboot."
+    else
+        warn "Linger dilewati. Backend bisa berhenti setelah logout atau reboot."
+    fi
 fi
 
 # ---- 4. Build -------------------------------------------------------------------------------
@@ -198,12 +214,15 @@ else
         || die "Image ${IMAGE_NAME}:${TAG} tidak ada di laptop maupun VPS."
     SIZE="$(docker image inspect "${IMAGE_NAME}:${TAG}" -f '{{.Size}}' | awk '{printf "%.0f MB", $1/1000000}')"
     echo "Ukuran image ${SIZE} (sebelum kompresi)."
+    # Tag sementara, supaya arsip membawa nama localhost/gomagang:TAG ke Podman.
+    docker tag "${IMAGE_NAME}:${TAG}" "${REMOTE_IMAGE}:${TAG}"
     if command -v pv >/dev/null; then
-        docker save "${IMAGE_NAME}:${TAG}" | pv | gzip -1 | vps "gunzip | docker load"
+        docker save "${REMOTE_IMAGE}:${TAG}" | pv | gzip -1 | vps "gunzip | podman load"
     else
-        docker save "${IMAGE_NAME}:${TAG}" | gzip -1 | vps "gunzip | docker load"
+        docker save "${REMOTE_IMAGE}:${TAG}" | gzip -1 | vps "gunzip | podman load"
     fi
-    remote has-image "$TAG" || die "Image tidak muncul di VPS setelah dikirim."
+    docker image rm "${REMOTE_IMAGE}:${TAG}" >/dev/null
+    remote has-image "$TAG" || die "Image ${REMOTE_IMAGE}:${TAG} tidak muncul di VPS setelah dikirim."
     ok "terkirim"
 fi
 
@@ -221,4 +240,5 @@ ELAPSED=$(( $(date +%s) - STARTED_AT ))
 step "Selesai dalam ${ELAPSED} detik"
 echo "  Versi   : ${TAG}${CURRENT_TAG:+ (sebelumnya ${CURRENT_TAG})}"
 echo "  Rollback: scripts/deploy.sh --tag ${CURRENT_TAG:-<tag>}"
-echo "  Log     : ssh ${DEPLOY_HOST} docker logs -f gomagang-backend"
+echo "  Log     : ssh ${DEPLOY_HOST} journalctl --user -u gomagang-backend -f"
+echo "  Status  : ssh ${DEPLOY_HOST} systemctl --user status gomagang-backend"
