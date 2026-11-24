@@ -1023,8 +1023,18 @@ async fn a_new_period_can_start_in_the_minute_after_a_stopped_one(db: PgPool) {
     .unwrap();
 
     // Touching the stopped period is still rejected, the next minute is free.
-    let response = post_periode(&app, Some(&cookie), range(&tutup, "2099-01-01T00:00:00+07:00")).await;
+    let response = post_periode(
+        &app,
+        Some(&cookie),
+        range(&tutup, "2099-01-01T00:00:00+07:00"),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::CONFLICT);
-    let response = post_periode(&app, Some(&cookie), range(&menit_berikutnya, "2099-01-01T00:00:00+07:00")).await;
+    let response = post_periode(
+        &app,
+        Some(&cookie),
+        range(&menit_berikutnya, "2099-01-01T00:00:00+07:00"),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::CREATED);
 }
