@@ -19,7 +19,8 @@ use crate::{
 ///   `MAX_BODY_SIZE` untuk unggahan berkas.
 /// - `PATCH /pendaftaran/accept`: hanya mahasiswa (konfirmasi penerimaan).
 /// - `PATCH /pendaftaran`, `PUT /pendaftaran/jadwal-seleksi-substansi`,
-///   `PUT /pendaftaran/plot-dpm`, dan `POST /pendaftaran/ekspor`: hanya Panitia Magang.
+///   `PUT /pendaftaran/plot-dpm`, `POST /pendaftaran/ekspor`, dan
+///   `POST /pendaftaran/ekspor-rekap-mk`: hanya Panitia Magang.
 /// - `GET /berkas/{id_berkas}`: unduh berkas dengan login.
 /// - `GET /berkas/publik/{token}`: unduh berkas lewat tautan publik bertanda tangan, tanpa login.
 pub fn routes(state: &AppState) -> Router<AppState> {
@@ -42,6 +43,9 @@ pub fn routes(state: &AppState) -> Router<AppState> {
     let ekspor = post(handler::ekspor)
         .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
 
+    let ekspor_rekap_mk = post(handler::ekspor_rekap_mk)
+        .route_layer(from_fn_with_state(state.clone(), require_panitia_magang));
+
     Router::new()
         .route(
             "/pendaftaran",
@@ -51,6 +55,7 @@ pub fn routes(state: &AppState) -> Router<AppState> {
         .route("/pendaftaran/jadwal-seleksi-substansi", simpan_jadwal)
         .route("/pendaftaran/plot-dpm", simpan_plotting)
         .route("/pendaftaran/ekspor", ekspor)
+        .route("/pendaftaran/ekspor-rekap-mk", ekspor_rekap_mk)
         .route("/pendaftaran/{id}", get(handler::detail))
         .route("/berkas/{id_berkas}", get(handler::download_berkas))
         .route(

@@ -31,7 +31,8 @@ DEPLOY_HOST="${DEPLOY_HOST:-kresnawan@ssh.kresnawan.com}"
 DEPLOY_DIR="${DEPLOY_DIR:-gomagang}"
 PG_CONTAINER="${PG_CONTAINER:-}"
 PG_NETWORK="${PG_NETWORK:-}"
-GOMAGANG_BIND="${GOMAGANG_BIND:-127.0.0.1:3000}"
+# Cloudflare Tunnel meneruskan https://gomagang-api.kresnawan.com ke alamat ini.
+GOMAGANG_BIND="${GOMAGANG_BIND:-127.0.0.1:3001}"
 
 TAG=""
 SKIP_BUILD=false

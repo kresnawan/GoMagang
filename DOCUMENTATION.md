@@ -36,6 +36,7 @@
 | `PUT` | [`/api/v1/pendaftaran/jadwal-seleksi-substansi`](#put-apiv1pendaftaranjadwal-seleksi-substansi) | Menyimpan satu jadwal seleksi substansi untuk satu atau banyak pendaftaran | Panitia Magang |
 | `PUT` | [`/api/v1/pendaftaran/plot-dpm`](#put-apiv1pendaftaranplot-dpm) | Menyimpan satu plotting DPM untuk satu atau banyak pendaftaran | Panitia Magang |
 | `POST` | [`/api/v1/pendaftaran/ekspor`](#post-apiv1pendaftaranekspor) | Mengekspor pendaftaran terpilih ke Excel (.xlsx) | Panitia Magang |
+| `POST` | [`/api/v1/pendaftaran/ekspor-rekap-mk`](#post-apiv1pendaftaranekspor-rekap-mk) | Mengekspor rekap penyetaraan mata kuliah dari pendaftaran terpilih ke Excel (.xlsx) | Panitia Magang |
 | `PATCH` | [`/api/v1/pendaftaran/accept?id={id}`](#patch-apiv1pendaftaranaccept) | Mengonfirmasi penerimaan, status `Diterima` menjadi `Aktif` | Mahasiswa pemilik pendaftaran |
 | `GET` | [`/api/v1/berkas/{id_berkas}`](#get-apiv1berkasid_berkas) | Mengunduh berkas pendaftaran | Pemilik berkas, Panitia Magang |
 | `GET` | [`/api/v1/berkas/publik/{token}`](#get-apiv1berkaspubliktoken) | Membuka berkas pendaftaran lewat link dari file ekspor, tanpa login | Publik, dengan link yang masih berlaku |
@@ -516,13 +517,14 @@ curl -X PATCH http://localhost:3000/api/v1/periode/2/start \
 
 Menghentikan periode yang sedang berlangsung saat itu juga, supaya pendaftaran langsung tertutup tanpa menunggu `waktu_tutup`. Hanya untuk Panitia Magang, dilindungi middleware `require_panitia_magang`. Tanpa body.
 
-**Yang dilakukan:** mengubah `waktu_tutup` menjadi waktu saat ini dalam WIB. `waktu_mulai` dan `catatan` tidak berubah.
+**Yang dilakukan:** mengubah `waktu_tutup` menjadi waktu saat ini dalam WIB, dibulatkan ke bawah ke menit. Misalnya periode yang dihentikan pukul 09:33:29 tersimpan dengan `waktu_tutup` 09:33:00, sama dengan yang ditampilkan. Kalau periode itu dimulai di menit yang sama, `waktu_tutup` disamakan dengan `waktu_mulai`. `waktu_mulai` dan `catatan` tidak berubah.
 
 Periode hanya bisa dihentikan kalau statusnya `berlangsung`.
 
 **Setelah dihentikan:**
 - Mahasiswa tidak bisa lagi melihat periode dan posisinya, dan tidak bisa mendaftar ke posisi di periode itu.
 - Pendaftaran yang sudah masuk tetap ada dan tidak berubah.
+- Periode baru lewat [`POST /api/v1/periode`](#post-apiv1periode) paling cepat bisa dimulai satu menit setelah `waktu_tutup`, karena rentang yang bersentuhan juga ditolak. Misalnya setelah dihentikan pukul 09:33, periode baru bisa dimulai pukul 09:34.
 - Periode tidak bisa dimulai lagi lewat [`PATCH /api/v1/periode/{id}/start`](#patch-apiv1periodeidstart), karena statusnya sudah `selesai`.
 
 **Contoh:**
@@ -1370,6 +1372,68 @@ Semua teks ditulis sebagai teks, jadi isian seperti `=HYPERLINK(...)` tidak pern
 | `Maksimal 10000 pendaftaran dalam satu ekspor.` | Lebih dari 10000 id berbeda |
 
 `format` selain `xlsx`, field yang tidak dikirim, tipe data yang salah, dan field yang tidak dikenal juga menghasilkan `422`, tapi body-nya teks biasa dari framework.
+
+### `POST /api/v1/pendaftaran/ekspor-rekap-mk`
+
+Mengekspor rekap penyetaraan mata kuliah (konversi MK) dari pendaftaran yang dipilih Panitia Magang, untuk rekapitulasi nilai akhir oleh program studi. Formatnya hanya Excel (`.xlsx`). Hanya untuk Panitia Magang, dilindungi middleware `require_panitia_magang`.
+
+**Header:** `Content-Type: application/json`
+
+**Body:** sama seperti [`POST /api/v1/pendaftaran/ekspor`](#post-apiv1pendaftaranekspor).
+
+| Field | Wajib | Aturan |
+|---|---|---|
+| `format` | Ya | `"xlsx"` |
+| `id_pendaftaran` | Ya | Array bilangan bulat, 1 sampai 10000 id. Id yang sama cukup dihitung sekali |
+
+**Contoh:**
+```bash
+curl -X POST http://localhost:3000/api/v1/pendaftaran/ekspor-rekap-mk \
+  -b "access_token=$ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"format":"xlsx","id_pendaftaran":[1,2,3]}' \
+  -o rekap-mk.xlsx
+```
+
+**Isi berkas:** tiga sheet. Baris judul di dua sheet pertama dibekukan dan diberi filter, dan pendaftaran diurutkan dari yang paling baru seperti di [`GET /api/v1/pendaftaran`](#get-apiv1pendaftaran).
+
+Sheet `Penyetaraan`, satu baris per mata kuliah yang dipilih:
+
+| Kolom | Isi |
+|---|---|
+| No | Nomor urut |
+| ID Pendaftaran | `id_pendaftaran`, kunci yang dipakai sheet Ringkasan |
+| NIM, Nama, Program Studi | Data diri mahasiswa |
+| Periode, Perusahaan, Posisi, Status | Pendaftaran yang memilih mata kuliah itu, dengan status saat ini |
+| MK Asal, MK Konversi, SKS | Data mata kuliah saat ini |
+| Dipilih Pada | Tanggal dan jam (WIB) mata kuliah dipilih, sebagai nilai tanggal Excel |
+| Keterangan | `MK sudah dihapus dari katalog` bila mata kuliahnya disembunyikan setelah dipilih |
+
+Sheet `Ringkasan`, satu baris per pendaftaran, termasuk yang belum memilih mata kuliah:
+
+| Kolom | Isi |
+|---|---|
+| No sampai Status | Sama seperti sheet Penyetaraan |
+| Jumlah MK | Rumus `COUNTIFS` ke sheet Penyetaraan berdasarkan ID Pendaftaran |
+| Total SKS | Rumus `SUMIFS` ke kolom SKS sheet Penyetaraan berdasarkan ID Pendaftaran |
+| Daftar MK Konversi | Misalnya `Pemrograman Web Lanjut (3 SKS); Cloud System Architecture (2 SKS)` |
+
+Kedua rumus disimpan beserta hasilnya, jadi angkanya langsung terlihat, dan ikut berubah bila baris di sheet Penyetaraan diubah atau dihapus. Rumus hanya berisi referensi sel; semua isian dari pengguna tetap ditulis sebagai teks.
+
+Sheet `Keterangan` berisi waktu ekspor, jumlah pendaftaran, jumlah yang belum memilih mata kuliah, jumlah mata kuliah yang dipilih, total SKS, dan jumlah pilihan yang mata kuliahnya sudah dihapus dari katalog.
+
+Semua pendaftaran yang dipilih ikut diekspor apa pun statusnya, termasuk yang `Batal/Mengundurkan Diri` setelah sempat memilih mata kuliah. Kolom Status bisa dipakai untuk menyaringnya. Ekspor tidak mengubah data apa pun.
+
+**Respons `200`:** isi berkas, dengan header yang sama seperti [`POST /api/v1/pendaftaran/ekspor`](#post-apiv1pendaftaranekspor), kecuali nama berkasnya `rekap-mk-{YYYYMMDD}-{HHMM}.xlsx` (waktu WIB saat diekspor).
+
+| Status | Arti |
+|---|---|
+| `400` | Body bukan JSON yang valid. Body-nya teks biasa dari framework |
+| `401` | Access token tidak valid |
+| `403` | User bukan Panitia Magang, termasuk mahasiswa pemilik pendaftaran |
+| `404` | Ada pendaftaran yang tidak ditemukan. Tidak ada berkas yang dibuat |
+| `415` | Header `Content-Type: application/json` tidak dikirim |
+| `422` | Isi body ditolak, dengan pesan yang sama seperti [`POST /api/v1/pendaftaran/ekspor`](#post-apiv1pendaftaranekspor) |
 
 ### `PATCH /api/v1/pendaftaran/accept`
 

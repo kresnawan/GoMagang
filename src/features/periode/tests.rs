@@ -945,3 +945,86 @@ async fn only_panitia_magang_can_stop_periods(db: PgPool) {
 
     assert_eq!(saved_times(&db, id).await, before);
 }
+
+async fn detik_tutup(db: &PgPool, id: i32) -> f64 {
+    sqlx::query_scalar(
+        "SELECT extract(second FROM waktu_tutup)::float8 FROM periode_pendaftaran
+         WHERE id_periode = $1",
+    )
+    .bind(id)
+    .fetch_one(db)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test]
+async fn stopping_saves_a_whole_minute(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = panitia_magang_cookie(&db, &state).await;
+    let id = insert_periode(&db, "-1 day", "20 days").await;
+
+    let response = stop_periode(&app, Some(&cookie), &id.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(json_body(response).await["status"], "selesai");
+    assert_eq!(detik_tutup(&db, id).await, 0.0);
+}
+
+#[sqlx::test]
+async fn stopping_in_the_minute_it_started_keeps_the_range_in_order(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = panitia_magang_cookie(&db, &state).await;
+    // Started a moment ago, part way into the current minute (as older rows were saved).
+    let id: i32 = sqlx::query_scalar(
+        "INSERT INTO periode_pendaftaran (waktu_mulai, waktu_tutup)
+         VALUES (clock_timestamp() AT TIME ZONE 'Asia/Jakarta' - interval '1 millisecond',
+                 now() AT TIME ZONE 'Asia/Jakarta' + interval '20 days')
+         RETURNING id_periode",
+    )
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+    let response = stop_periode(&app, Some(&cookie), &id.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let in_order: bool = sqlx::query_scalar(
+        "SELECT waktu_tutup >= waktu_mulai FROM periode_pendaftaran WHERE id_periode = $1",
+    )
+    .bind(id)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    assert!(in_order);
+}
+
+#[sqlx::test]
+async fn a_new_period_can_start_in_the_minute_after_a_stopped_one(db: PgPool) {
+    let (app, state) = setup(db.clone());
+    let cookie = panitia_magang_cookie(&db, &state).await;
+    let id = insert_periode(&db, "-1 day", "20 days").await;
+    let response = stop_periode(&app, Some(&cookie), &id.to_string()).await;
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let tutup: String = sqlx::query_scalar(
+        "SELECT to_char(waktu_tutup, 'YYYY-MM-DD\"T\"HH24:MI:SS+07:00') FROM periode_pendaftaran
+         WHERE id_periode = $1",
+    )
+    .bind(id)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+    let menit_berikutnya: String = sqlx::query_scalar(
+        "SELECT to_char(waktu_tutup + interval '1 minute', 'YYYY-MM-DD\"T\"HH24:MI:SS+07:00')
+         FROM periode_pendaftaran WHERE id_periode = $1",
+    )
+    .bind(id)
+    .fetch_one(&db)
+    .await
+    .unwrap();
+
+    // Touching the stopped period is still rejected, the next minute is free.
+    let response = post_periode(&app, Some(&cookie), range(&tutup, "2099-01-01T00:00:00+07:00")).await;
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let response = post_periode(&app, Some(&cookie), range(&menit_berikutnya, "2099-01-01T00:00:00+07:00")).await;
+    assert_eq!(response.status(), StatusCode::CREATED);
+}

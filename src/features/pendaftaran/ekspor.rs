@@ -198,14 +198,14 @@ pub fn lampirkan_berkas(
     }
 }
 
-/// Nama berkas hasil ekspor berdasarkan waktu sekarang dalam WIB, misalnya
-/// `pendaftar-20261109-1430.xlsx`.
-pub fn nama_berkas(format: FormatEkspor) -> String {
+/// Nama berkas hasil ekspor berdasarkan awalan dan waktu sekarang dalam WIB, misalnya
+/// `pendaftar-20261109-1430.xlsx` untuk awalan `pendaftar`.
+pub fn nama_berkas(awalan: &str, format: FormatEkspor) -> String {
     let sekarang = OffsetDateTime::now_utc().to_offset(offset!(+7));
     let waktu = sekarang
         .format(format_description!("[year][month][day]-[hour][minute]"))
         .unwrap_or_default();
-    format!("pendaftar-{waktu}.{}", format.ekstensi())
+    format!("{awalan}-{waktu}.{}", format.ekstensi())
 }
 
 const JUDUL_KOLOM: [&str; 21] = [
@@ -251,7 +251,7 @@ fn tanggal_pendek(tanggal: &str) -> String {
 }
 
 /// Menulis waktu dalam WIB, misalnya `9 Des 2026 14.30 WIB`. Dipakai di lembar Keterangan.
-fn waktu_wib(waktu: OffsetDateTime) -> String {
+pub(super) fn waktu_wib(waktu: OffsetDateTime) -> String {
     let waktu = waktu.to_offset(offset!(+7));
     format!(
         "{} {} {} {:02}.{:02} WIB",
@@ -337,7 +337,7 @@ fn kolom_berkas(semua: &[BarisEkspor]) -> (Vec<KolomBerkas<'_>>, Vec<String>) {
 /// Label periode untuk kolom Periode, misalnya `Ganjil 2026/2027 (1 Okt 2026 – 30 Nov 2026)`.
 ///
 /// Bila periode tidak punya catatan, yang ditulis hanya rentang tanggalnya.
-fn label_periode(baris: &BarisEkspor) -> String {
+pub(super) fn label_periode(baris: &BarisEkspor) -> String {
     let rentang = format!(
         "{} – {}",
         tanggal_pendek(&baris.mulai_periode),

@@ -18,7 +18,7 @@ use super::{
         UpdateStatus, UpdateStatusResult,
     },
     notifikasi::{self, Pengubah},
-    repository, storage,
+    rekap_mk, repository, storage,
     tautan::MASA_BERLAKU,
 };
 use crate::{
@@ -258,8 +258,40 @@ pub async fn ekspor(
         tautan_berlaku_sampai,
     };
 
-    // Building the file is CPU work, so it runs off the async workers.
-    let isi = tokio::task::spawn_blocking(move || ekspor::buat_xlsx(&baris, &info))
+    let isi = bangun_berkas(move || ekspor::buat_xlsx(&baris, &info)).await?;
+    Ok(respons_berkas(data.format, "pendaftar", isi))
+}
+
+/// `POST /api/v1/pendaftaran/ekspor-rekap-mk`: Panitia Magang mengekspor rekap penyetaraan mata
+/// kuliah dari pendaftaran pilihan menjadi berkas Excel.
+///
+/// Body dan aturannya sama dengan [`ekspor`]: id diurutkan dan duplikatnya dibuang, maksimal
+/// 10.000, dan satu id yang tidak ditemukan membuat seluruh ekspor dijawab `404`. Pendaftaran
+/// yang belum memilih mata kuliah tetap muncul di lembar Ringkasan. Isi berkas dijelaskan di
+/// [`rekap_mk::buat_xlsx`].
+pub async fn ekspor_rekap_mk(
+    State(state): State<AppState>,
+    Json(data): Json<Ekspor>,
+) -> Result<impl IntoResponse, AppError> {
+    let data = data.validate()?;
+
+    let pendaftaran = ekspor::find_baris(&state.db, &data.id_pendaftaran).await?;
+    if pendaftaran.len() != data.id_pendaftaran.len() {
+        return Err(AppError::NotFound);
+    }
+    let mk = rekap_mk::find_mk(&state.db, &data.id_pendaftaran).await?;
+    let diekspor = OffsetDateTime::now_utc();
+
+    let isi = bangun_berkas(move || rekap_mk::buat_xlsx(&pendaftaran, &mk, diekspor)).await?;
+    Ok(respons_berkas(data.format, "rekap-mk", isi))
+}
+
+/// Menyusun berkas ekspor di thread terpisah (`spawn_blocking`), karena berat di CPU.
+async fn bangun_berkas<F>(bangun: F) -> Result<Vec<u8>, AppError>
+where
+    F: FnOnce() -> Result<Vec<u8>, rust_xlsxwriter::XlsxError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(bangun)
         .await
         .map_err(|err| {
             tracing::error!(error = %err, "export task failed");
@@ -268,23 +300,29 @@ pub async fn ekspor(
         .map_err(|err| {
             tracing::error!(error = %err, "failed to build export");
             AppError::Internal
-        })?;
+        })
+}
 
+/// Respons unduhan berkas ekspor, dengan nama berkas `{awalan}-{YYYYMMDD}-{HHMM}.{ekstensi}`.
+fn respons_berkas(
+    format: ekspor::FormatEkspor,
+    awalan: &str,
+    isi: Vec<u8>,
+) -> impl IntoResponse + use<> {
     let headers = [
-        (header::CONTENT_TYPE, data.format.content_type().to_string()),
+        (header::CONTENT_TYPE, format.content_type().to_string()),
         (
             header::CONTENT_DISPOSITION,
             format!(
                 "attachment; filename=\"{}\"",
-                ekspor::nama_berkas(data.format)
+                ekspor::nama_berkas(awalan, format)
             ),
         ),
         (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
         // Personal data of mahasiswa, so no cache may keep a copy.
         (header::CACHE_CONTROL, "private, no-store".to_string()),
     ];
-
-    Ok((headers, isi))
+    (headers, isi)
 }
 
 /// Memuat detail pendaftaran yang baru saja diubah, misalnya setelah perubahan status.

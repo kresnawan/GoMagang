@@ -4175,6 +4175,195 @@ async fn only_panitia_magang_can_export(db: PgPool) {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
+const REKAP_MK_URI: &str = "/api/v1/pendaftaran/ekspor-rekap-mk";
+
+async fn post_rekap_mk(app: &Router, cookie: Option<&str>, body: Value) -> Response<Body> {
+    let mut request = Request::builder()
+        .method("POST")
+        .uri(REKAP_MK_URI)
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(cookie) = cookie {
+        request = request.header(header::COOKIE, cookie);
+    }
+    app.clone()
+        .oneshot(request.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap()
+}
+
+/// Isi satu bagian berkas .xlsx, atau teks kosong bila bagian itu tidak ada.
+fn bagian_xlsx(isi: &[u8], nama: &str) -> String {
+    use std::io::Read;
+
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(isi)).unwrap();
+    let mut teks = String::new();
+    if let Ok(mut file) = zip.by_name(nama) {
+        file.read_to_string(&mut teks).unwrap();
+    }
+    teks
+}
+
+impl Ctx {
+    /// Menambah mata kuliah ke katalog dan mengembalikan id-nya.
+    async fn mata_kuliah(&self, mk_asal: &str, mk_konversi: &str, sks: i32) -> i32 {
+        sqlx::query_scalar(
+            "INSERT INTO mata_kuliah_konversi (mk_asal, mk_konversi, sks)
+             VALUES ($1, $2, $3) RETURNING id_mk_konversi",
+        )
+        .bind(mk_asal)
+        .bind(mk_konversi)
+        .bind(sks)
+        .fetch_one(&self.db)
+        .await
+        .unwrap()
+    }
+
+    async fn pilih_mk(&self, id_pendaftaran: i64, id_mk: i32) {
+        sqlx::query("INSERT INTO penyetaraan_mk (id_pendaftaran, id_mk_konversi) VALUES ($1, $2)")
+            .bind(id_pendaftaran as i32)
+            .bind(id_mk)
+            .execute(&self.db)
+            .await
+            .unwrap();
+    }
+}
+
+#[sqlx::test]
+async fn panitia_magang_exports_the_mk_recap_of_the_picked_pendaftaran(db: PgPool) {
+    let ctx = setup(db);
+    let panitia_magang = ctx.panitia_magang().await;
+    let (a, _) = ctx.pendaftaran_baru("a", "Aktif").await;
+    let (b, _) = ctx.pendaftaran_baru("b", "Aktif").await;
+    let (lain, _) = ctx.pendaftaran_baru("c", "Aktif").await;
+
+    let web = ctx
+        .mata_kuliah("Pengembangan Antarmuka Web", "Pemrograman Web Lanjut", 3)
+        .await;
+    let cloud = ctx
+        .mata_kuliah("System Architecture", "Cloud System Architecture", 2)
+        .await;
+    let rahasia = ctx.mata_kuliah("Asal Lain", "MK Milik Orang Lain", 4).await;
+    ctx.pilih_mk(a, web).await;
+    ctx.pilih_mk(a, cloud).await;
+    ctx.pilih_mk(lain, rahasia).await;
+    // Hidden from the catalog after a already picked it.
+    sqlx::query("UPDATE mata_kuliah_konversi SET deleted_at = now() WHERE id_mk_konversi = $1")
+        .bind(cloud)
+        .execute(&ctx.db)
+        .await
+        .unwrap();
+    // Text from a mahasiswa that looks like a formula.
+    sqlx::query(
+        "UPDATE mahasiswa SET nama = '=1+1'
+         WHERE id_pengguna = (SELECT id_pengguna FROM pendaftaran WHERE id_pendaftaran = $1)",
+    )
+    .bind(a as i32)
+    .execute(&ctx.db)
+    .await
+    .unwrap();
+    let before = ctx.snapshot(a).await;
+
+    let body = serde_json::json!({ "format": "xlsx", "id_pendaftaran": [a, b, a] });
+    let response = post_rekap_mk(&ctx.app, Some(&panitia_magang), body).await;
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let headers = response.headers();
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    let disposition = headers[header::CONTENT_DISPOSITION].to_str().unwrap();
+    assert!(
+        disposition.starts_with("attachment; filename=\"rekap-mk-")
+            && disposition.ends_with(".xlsx\""),
+        "{disposition}"
+    );
+    assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
+
+    let isi = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let workbook = bagian_xlsx(&isi, "xl/workbook.xml");
+    let penyetaraan = bagian_xlsx(&isi, "xl/worksheets/sheet1.xml");
+    let ringkasan = bagian_xlsx(&isi, "xl/worksheets/sheet2.xml");
+    let strings = bagian_xlsx(&isi, "xl/sharedStrings.xml");
+
+    for nama in ["Penyetaraan", "Ringkasan", "Keterangan"] {
+        assert!(workbook.contains(&format!("name=\"{nama}\"")), "{nama}");
+    }
+
+    // Penyetaraan: a header and one row per picked mata kuliah of the picked pendaftaran.
+    assert_eq!(penyetaraan.matches("<row ").count(), 3);
+    assert!(!penyetaraan.contains("<f>"), "no formula in the data sheet");
+    for teks in [
+        "MK Asal",
+        "Pengembangan Antarmuka Web",
+        "Pemrograman Web Lanjut",
+        "Cloud System Architecture",
+        "MK sudah dihapus dari katalog",
+        "=1+1",
+        "Daftar MK Konversi",
+        "Pemrograman Web Lanjut (3 SKS); Cloud System Architecture (2 SKS)",
+    ] {
+        assert!(strings.contains(teks), "{teks}");
+    }
+    assert!(!strings.contains("MK Milik Orang Lain"));
+
+    // Ringkasan: one row per pendaftaran, b included although it picked nothing. The totals are
+    // formulas over the Penyetaraan sheet, with their results stored. b was registered after a, so
+    // it comes first, as in the list.
+    assert_eq!(ringkasan.matches("<row ").count(), 3);
+    assert!(ringkasan.contains("<f>COUNTIFS(Penyetaraan!$B:$B,$B2)</f><v>0</v>"));
+    assert!(ringkasan.contains("<f>SUMIFS(Penyetaraan!$L:$L,Penyetaraan!$B:$B,$B2)</f><v>0</v>"));
+    assert!(ringkasan.contains("<f>COUNTIFS(Penyetaraan!$B:$B,$B3)</f><v>2</v>"));
+    assert!(ringkasan.contains("<f>SUMIFS(Penyetaraan!$L:$L,Penyetaraan!$B:$B,$B3)</f><v>5</v>"));
+
+    // Exporting changes nothing.
+    assert_eq!(ctx.snapshot(a).await, before);
+}
+
+#[sqlx::test]
+async fn rejects_bad_mk_recap_requests(db: PgPool) {
+    let ctx = setup(db);
+    let panitia_magang = ctx.panitia_magang().await;
+    let (id, cookie) = ctx.pendaftaran_baru("a", "Aktif").await;
+
+    let response = post_rekap_mk(
+        &ctx.app,
+        Some(&panitia_magang),
+        serde_json::json!({ "format": "xlsx", "id_pendaftaran": [] }),
+    )
+    .await;
+    assert_rejected(
+        response,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "Pilih minimal satu pendaftaran.",
+    )
+    .await;
+
+    // One unknown id fails the whole export.
+    let response = post_rekap_mk(
+        &ctx.app,
+        Some(&panitia_magang),
+        serde_json::json!({ "format": "xlsx", "id_pendaftaran": [id, 9999] }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+
+    let response = post_rekap_mk(
+        &ctx.app,
+        Some(&panitia_magang),
+        serde_json::json!({ "format": "csv", "id_pendaftaran": [id] }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let body = serde_json::json!({ "format": "xlsx", "id_pendaftaran": [id] });
+    let response = post_rekap_mk(&ctx.app, None, body.clone()).await;
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    // Not even a mahasiswa exporting their own pendaftaran.
+    let response = post_rekap_mk(&ctx.app, Some(&cookie), body).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
 #[sqlx::test]
 async fn rejects_a_position_of_a_hidden_company(db: PgPool) {
     let ctx = setup(db);

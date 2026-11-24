@@ -81,7 +81,8 @@ pub async fn create(db: &PgPool, periode: &NewPeriode) -> Result<Option<i32>, sq
 }
 
 /// Memajukan `waktu_mulai` periode yang belum dimulai ke waktu sekarang (WIB), dengan `waktu_tutup`
-/// tetap.
+/// tetap. Waktunya tidak dibulatkan ke menit seperti di [`stop`]: periode yang baru dihentikan di
+/// menit yang sama akan bersentuhan dan menolak periode ini.
 ///
 /// Rentang baru tidak boleh beririsan dengan periode lain, sama seperti aturan periode baru. Tabel
 /// dikunci agar dua request tidak sama-sama menganggap periode belum dimulai. Waktu sekarang
@@ -148,8 +149,11 @@ pub async fn start(db: &PgPool, id: i32) -> Result<StartResult, sqlx::Error> {
     Ok(StartResult::Started)
 }
 
-/// Memundurkan `waktu_tutup` periode yang sedang berlangsung ke waktu sekarang (WIB), dengan
-/// `waktu_mulai` tetap.
+/// Memundurkan `waktu_tutup` periode yang sedang berlangsung ke waktu sekarang (WIB), dibulatkan ke
+/// bawah ke menit, dengan `waktu_mulai` tetap. Pembulatan membuat waktu tutup yang tersimpan sama
+/// dengan yang ditampilkan, sehingga form (yang hanya sampai menit) tidak menabrak detik yang
+/// tersembunyi. Bila periode dimulai di menit yang sama, `waktu_tutup` disamakan dengan
+/// `waktu_mulai` agar rentangnya tidak terbalik.
 ///
 /// Rentangnya hanya memendek, sehingga tidak mungkin menjadi beririsan dengan periode lain. Tabel
 /// dikunci dan waktu diambil dengan `clock_timestamp()`, dengan alasan yang sama seperti
@@ -186,7 +190,10 @@ pub async fn stop(db: &PgPool, id: i32) -> Result<StopResult, sqlx::Error> {
 
     sqlx::query(
         "UPDATE periode_pendaftaran
-         SET waktu_tutup = clock_timestamp() AT TIME ZONE 'Asia/Jakarta'
+         SET waktu_tutup = GREATEST(
+                 waktu_mulai,
+                 date_trunc('minute', clock_timestamp() AT TIME ZONE 'Asia/Jakarta')
+             )
          WHERE id_periode = $1",
     )
     .bind(id)

@@ -3,6 +3,7 @@ mod handler;
 mod model;
 mod notifikasi;
 mod pembatalan;
+mod rekap_mk;
 mod repository;
 mod routes;
 mod storage;
